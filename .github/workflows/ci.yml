@@ -1,3 +1,4 @@
+# .github/workflows/ci.yml
 name: CI
 
 on:
@@ -8,29 +9,46 @@ on:
 
 jobs:
   test:
+    name: Test on Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ['3.9', '3.10', '3.11', '3.12']
+
     steps:
       - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Verify project files
+        run: |
+          echo "Repository root contains:"
+          ls -1
+          test -f pyproject.toml || (echo 'pyproject.toml missing' && exit 1)
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Verify Python installation
         run: python --version
 
       - name: Cache pip
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: |
-            python -m pip install --upgrade pip build
-            pip install -e ".[test]"
+          python -m pip install --upgrade pip build
+          pip install -e ".[test]"
 
       - name: Run tests
-        run: pytest --maxfail=1 --disable-warnings -v
+        run: |
+          pytest --maxfail=1 --disable-warnings -v
 
       - name: Upload coverage (optional)
         if: success() && matrix.python-version == '3.12'
@@ -38,3 +56,4 @@ jobs:
           pip install coverage codecov
           coverage run -m pytest
           codecov --token=${{ secrets.CODECOV_TOKEN }}
+
