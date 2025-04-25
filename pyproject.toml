@@ -16,7 +16,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Extras for testing and CI
 test = [
   "pytest>=7.0.0",
   "coverage",
