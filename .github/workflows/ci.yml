@@ -27,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip build
-          pip install .[test]
+          pip install ".[test]"
 
       - name: Run tests
         run: pytest --maxfail=1 --disable-warnings -v

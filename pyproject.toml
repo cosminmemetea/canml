@@ -1,16 +1,28 @@
 [project]
 name = "canmlio"
 version = "0.1.0"
-description = "Decode CAN BLF logs using DBC files into pandas DataFrames"
-authors = [{ name="Cosmin B. Memetea", email="cosmin.memetea@gmail.com" }]
+description = "Decode CAN BLF logs using DBC files into pandas DataFrames and export to CSV"
 readme = "README.md"
+authors = [
+  { name = "Cosmin B. Memetea", email = "cosmin.memetea@gmail.com" }
+]
 license = { text = "MIT" }
 requires-python = ">=3.8"
 dependencies = [
-  "python-can>=4.2.0",
-  "cantools>=36.0.0",
-  "pandas>=1.5.0",
-  "numpy>=1.26.4"
+  "cantools==39.4.4",
+  "python-can==4.4.0",
+  "pandas==2.2.2",
+  "numpy==1.26.4"
+]
+
+[project.optional-dependencies]
+# Extras for testing and CI
+test = [
+  "pytest>=7.0.0",
+  "coverage",
+  "codecov",
+  "twine",
+  "build"
 ]
 
 [build-system]
