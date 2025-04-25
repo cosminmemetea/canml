@@ -57,8 +57,8 @@ class TestCanmlioIntegration(unittest.TestCase):
             self.assertEqual(len(csv_df), len(combined))
             self.assertListEqual(list(csv_df.columns), list(combined.columns))
         finally:
-            pass
-            # os.remove(output)
+            # pass - if one wants to keep locally the csv generated file.
+            os.remove(output)
 
 if __name__ == "__main__":
     unittest.main()
