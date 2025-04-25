@@ -16,17 +16,15 @@ jobs:
         python-version: ['3.9', '3.10', '3.11', '3.12']
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
       - name: Verify project files
         run: |
-          echo "Repository root contains:"
           ls -1
-          test -f pyproject.toml || (echo 'pyproject.toml missing' && exit 1)
-          test -f examples/generate_blf.py || (echo 'Example script missing: examples/generate_blf.py' && exit 1)
+          test -f pyproject.toml || (echo '❌ pyproject.toml missing' && exit 1)
+          test -f examples/generate_blf.py || (echo '❌ examples/generate_blf.py missing' && exit 1)
 
-      - name: Check example script syntax
+      - name: Check example syntax
         run: python -m py_compile examples/generate_blf.py
 
       - name: Set up Python ${{ matrix.python-version }}
@@ -34,7 +32,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Verify Python installation
+      - name: Verify Python version
         run: python --version
 
       - name: Cache pip
@@ -50,9 +48,14 @@ jobs:
           python -m pip install --upgrade pip build
           pip install -e ".[test]"
 
-      - name: Run tests
+      - name: Generate BLF fixtures
         run: |
-          pytest --maxfail=1 --disable-warnings -v
+          python examples/generate_blf.py -d tests/test.dbc -o tests/output-0.blf -n 100 -i 0.01
+          python examples/generate_blf.py -d tests/test.dbc -o tests/output-1.blf -n 100 -i 0.01
+          python examples/generate_blf.py -d tests/test.dbc -o tests/output-2.blf -n 100 -i 0.01
+
+      - name: Run tests
+        run: pytest --maxfail=1 --disable-warnings -v
 
       - name: Upload coverage (optional)
         if: success() && matrix.python-version == '3.12'
