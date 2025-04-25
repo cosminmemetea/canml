@@ -24,6 +24,10 @@ jobs:
           echo "Repository root contains:"
           ls -1
           test -f pyproject.toml || (echo 'pyproject.toml missing' && exit 1)
+          test -f examples/generate_blf.py || (echo 'Example script missing: examples/generate_blf.py' && exit 1)
+
+      - name: Check example script syntax
+        run: python -m py_compile examples/generate_blf.py
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
@@ -56,4 +60,3 @@ jobs:
           pip install coverage codecov
           coverage run -m pytest
           codecov --token=${{ secrets.CODECOV_TOKEN }}
-
