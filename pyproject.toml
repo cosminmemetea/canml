@@ -1,0 +1,18 @@
+[project]
+name = "canmlio"
+version = "0.1.0"
+description = "Decode CAN BLF logs using DBC files into pandas DataFrames"
+authors = [{ name="Cosmin B. Memetea", email="cosmin.memetea@gmail.com" }]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+dependencies = [
+  "python-can>=4.2.0",
+  "cantools>=36.0.0",
+  "pandas>=1.5.0",
+  "numpy>=1.26.4"
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "build"]
+build-backend = "setuptools.build_meta"
