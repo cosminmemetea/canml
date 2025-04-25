@@ -1,0 +1,50 @@
+
+#Test Executions
+tests/*.blf
+tests/*.csv
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.eggs/
+*.whl
+
+# Virtual environments
+venv/
+ENV/
+env/
+.canmlenv/
+.venv/
+canmlenv
+
+
+# Pytest cache and coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# IDE and editor directories
+.vscode/
+.idea/
+
+# Mac files
+.DS_Store
+
+# Log files
+*.log
+
+# Test artifacts (auto-generated CSVs, BLF segments)
+tests/*.csv
+
+# Mypy
+.mypy_cache/

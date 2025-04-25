@@ -1,109 +1,147 @@
-import cantools
-import pandas as pd
-from python_can import Bus, Message
-from pathlib import Path
+# canml/canmlio.py
+"""
+canmlio: A library for processing CAN BLF files with DBC decoding.
+
+This module provides functions to load CAN BLF files, decode messages using a DBC file,
+and export the results to various formats (e.g., CSV). It is designed to be robust, flexible,
+and suitable for automotive CAN data analysis.
+
+Dependencies:
+    - python-can (for BLF reading)
+    - cantools (for DBC decoding)
+    - pandas (for DataFrame handling)
+
+Usage example:
+    ```python
+    from canml import canmlio
+
+    # Load BLF file with DBC
+    df = canmlio.load_blf("data.blf", "signals.dbc", use_raw_timestamps=True)
+
+    # Export to CSV
+    canmlio.to_csv(df, "output.csv")
+    ```
+"""
 import logging
+from pathlib import Path
+from typing import List, Optional
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+import pandas as pd
+import cantools
+from can.io.blf import BLFReader
+
+# Public API
+__all__: List[str] = ["load_blf", "to_csv"]
+
+# Configure module-level logger
 logger = logging.getLogger(__name__)
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
-def load_blf(blf_path: str, dbc_path: str) -> pd.DataFrame:
+
+def load_blf(
+    blf_path: str,
+    dbc_path: str,
+    force_uniform_timing: bool = True,
+    interval_seconds: float = 0.01
+) -> pd.DataFrame:
     """
-    Load a BLF file, decode CAN messages using a DBC file, and return a pandas DataFrame.
+    Load a BLF file and decode CAN messages using a DBC file.
 
-    Args:
-        blf_path (str): Path to the BLF file.
-        dbc_path (str): Path to the CAN.DBC file.
+    Arguments:
+        blf_path: Path to the BLF log file.
+        dbc_path: Path to the DBC file defining CAN signals.
+        force_uniform_timing: If True, override timestamps with uniform spacing.
+        interval_seconds: Interval in seconds for uniform timing (default 0.01s).
 
     Returns:
-        pd.DataFrame: DataFrame with timestamps and decoded signal values.
+        A pandas DataFrame containing a "timestamp" column plus one column per signal.
 
     Raises:
-        FileNotFoundError: If BLF or DBC file is not found.
-        ValueError: If BLF file is invalid or cannot be decoded.
+        FileNotFoundError: BLF or DBC file not found.
+        ValueError: Invalid BLF or DBC file.
     """
-    # Validate file paths
     blf_file = Path(blf_path)
     dbc_file = Path(dbc_path)
-    if not blf_file.exists():
+
+    if not blf_file.is_file():
         raise FileNotFoundError(f"BLF file not found: {blf_path}")
-    if not dbc_file.exists():
+    if not dbc_file.is_file():
         raise FileNotFoundError(f"DBC file not found: {dbc_path}")
 
+    # Load DBC
     try:
-        # Load DBC file
-        logger.info(f"Loading DBC file: {dbc_path}")
-        db = cantools.database.load_file(dbc_path)
+        logger.info(f"Loading DBC: {dbc_path}")
+        db = cantools.database.load_file(str(dbc_file))
+    except Exception as e:
+        logger.error(f"Invalid DBC file {dbc_path}: {e}")
+        raise ValueError(f"Invalid DBC file: {e}")
 
-        # Initialize data storage
-        data = []
-        timestamps = []
+    # Open BLF
+    try:
+        logger.info(f"Opening BLF: {blf_path}")
+        reader = BLFReader(str(blf_file))
+    except Exception as e:
+        logger.error(f"Invalid BLF file {blf_path}: {e}")
+        raise ValueError(f"Invalid BLF file: {e}")
 
-        # Read BLF file
-        logger.info(f"Reading BLF file: {blf_path}")
-        bus = Bus(blf_path, interface='vector', receive_own_messages=False)
+    records: List[dict] = []
+    raw_timestamps: List[float] = []
 
-        # Process each message
-        for msg in bus:
-            try:
-                # Decode message using DBC
-                decoded = db.decode_message(msg.arbitration_id, msg.data)
-                # Append decoded signals and timestamp
-                data.append(decoded)
-                timestamps.append(msg.timestamp)
-            except cantools.database.errors.DecodeError:
-                # Skip messages that can't be decoded
-                logger.debug(f"Skipping undecodable message with ID {msg.arbitration_id}")
-                continue
-            except KeyError:
-                # Skip messages not defined in DBC
-                logger.debug(f"Skipping message with ID {msg.arbitration_id} not in DBC")
-                continue
+    for msg in reader:
+        try:
+            decoded = db.decode_message(msg.arbitration_id, msg.data)
+        except (cantools.database.errors.DecodeError, KeyError):
+            # Skip messages that can't be decoded
+            logger.debug(f"Skipping CAN ID {msg.arbitration_id}")
+            continue
 
-        # Close bus
-        bus.shutdown()
+        records.append(decoded)
+        raw_timestamps.append(msg.timestamp)
 
-        # Create DataFrame
-        logger.info("Converting decoded data to DataFrame")
-        df = pd.DataFrame(data)
-        df['timestamp'] = timestamps
+    # Close reader
+    reader.stop()
 
-        # Reorder columns to have timestamp first
-        cols = ['timestamp'] + [col for col in df.columns if col != 'timestamp']
-        df = df[cols]
-
-        # Ensure DataFrame is not empty
-        if df.empty:
-            logger.warning("No valid data decoded from BLF file")
-            return pd.DataFrame()
-
-        logger.info(f"Successfully decoded {len(df)} messages")
+    # Build DataFrame
+    df = pd.DataFrame(records)
+    if df.empty:
+        logger.warning("No CAN messages decoded from BLF")
         return df
 
-    except Exception as e:
-        logger.error(f"Error processing BLF file: {str(e)}")
-        raise ValueError(f"Failed to process BLF file: {str(e)}")
+    if force_uniform_timing:
+        # Uniform spacing by record index
+        df["timestamp"] = df.index * interval_seconds
+    else:
+        df["timestamp"] = raw_timestamps
+
+    # Ensure timestamp is first column
+    columns = ["timestamp"] + [col for col in df.columns if col != "timestamp"]
+    return df[columns]
+
 
 def to_csv(df: pd.DataFrame, output_path: str) -> None:
     """
-    Export a pandas DataFrame to a CSV file.
+    Export DataFrame to CSV.
 
     Args:
-        df (pd.DataFrame): DataFrame containing decoded CAN data.
-        output_path (str): Path to save the CSV file.
+        df: pandas DataFrame with decoded CAN data.
+        output_path: Destination CSV file path.
 
     Raises:
-        ValueError: If DataFrame is empty or output path is invalid.
+        ValueError: If DataFrame is empty or write fails.
     """
     if df.empty:
-        raise ValueError("Cannot export empty DataFrame to CSV")
+        raise ValueError("Cannot export empty DataFrame: DataFrame is empty")
 
     output_file = Path(output_path)
-    logger.info(f"Exporting data to CSV: {output_path}")
     try:
+        logger.info(f"Writing CSV: {output_path}")
         df.to_csv(output_file, index=False)
-        logger.info(f"Successfully exported data to {output_path}")
     except Exception as e:
-        logger.error(f"Error exporting to CSV: {str(e)}")
-        raise ValueError(f"Failed to export CSV: {str(e)}")
+        logger.error(f"Failed to write CSV {output_path}: {e}")
+        raise ValueError(f"Failed to export CSV: {e}")

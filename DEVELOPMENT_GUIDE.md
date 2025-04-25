@@ -39,6 +39,8 @@ To contribute to `canml`, set up a local development environment as follows:
 
 2. **Create a Virtual Environment**:
    ```bash
+   python3 -m venv canmlenv
+   source canmlenv/bin/activate
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
@@ -119,6 +121,9 @@ To contribute a feature or bug fix:
    - Run tests with:
      ```bash
      pytest --cov=canml
+
+     python -m unittest tests.test_integration_canmlio -v
+     python -m unittest tests.test_canmlio -v
      ```
    - Ensure 100% test coverage for new code.
    - Fix any linting issues with `black` and `flake8`.
