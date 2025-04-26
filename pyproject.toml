@@ -1,6 +1,6 @@
 [project]
 name = "canml"
-version = "0.1.0"
+version = "0.1.0p2"
 description = "Decode CAN BLF logs using DBC files into pandas DataFrames and export to CSV"
 readme = { file = "README.MD", content-type = "text/markdown" }
 authors = [
@@ -15,7 +15,6 @@ dependencies = [
   "numpy==1.26.4"
 ]
 
-# Optional extra dependencies (e.g. for testing)
 [project.optional-dependencies]
 test = [
   "pytest>=7.0.0",
@@ -25,12 +24,12 @@ test = [
   "build"
 ]
 
-# Add useful links on PyPI
+# Project links that show up on PyPI
 urls = { 
-  "Homepage"      = "https://github.com/cosminmemetea/canml",
-  "Documentation" = "https://canml.readthedocs.io/",
-  "Source"        = "https://github.com/cosminmemetea/canml",
-  "Tracker"       = "https://github.com/cosminmemetea/canml/issues"
+  Homepage = "https://github.com/cosminmemetea/canml",
+  Documentation = "https://canml.readthedocs.io/",
+  Source = "https://github.com/cosminmemetea/canml",
+  Tracker = "https://github.com/cosminmemetea/canml/issues"
 }
 
 # Classifiers power search & badges on PyPI
@@ -40,17 +39,14 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.8",
-  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Topic :: Scientific/Engineering :: Information Analysis"
 ]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel", "build"]
 build-backend = "setuptools.build_meta"
 
-# Tell setuptools to include your canml package directory
-[tool.setuptools.package-dir]
-"" = "."
-
+# Tell setuptools to find your canml package
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["canml", "canml.*"]
