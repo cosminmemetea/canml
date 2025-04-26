@@ -2,7 +2,7 @@
 name = "canml"
 version = "0.1.1"
 description = "Decode CAN BLF logs using DBC files into pandas DataFrames and export to CSV"
-readme = { file = "README.MD", content-type = "text/markdown" }
+readme = { file = "README.md", content-type = "text/markdown" }
 authors = [
   { name = "Cosmin B. Memetea", email = "cosmin.memetea@gmail.com" }
 ]
@@ -15,24 +15,7 @@ dependencies = [
   "numpy==1.26.4"
 ]
 
-# Project URLs
-[project.urls]
-Homepage      = "https://github.com/cosminmemetea/canml"
-Documentation = "https://canml.readthedocs.io/"
-Source        = "https://github.com/cosminmemetea/canml"
-Tracker       = "https://github.com/cosminmemetea/canml/issues"
-
-# Optional extras
-[project.optional-dependencies]
-test = [
-  "pytest>=7.0.0",
-  "coverage",
-  "codecov",
-  "twine",
-  "build"
-]
-
-# Trove classifiers must be an array under [project]
+# Trove classifiers must be a top-level array under [project]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
@@ -42,11 +25,25 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Information Analysis"
 ]
 
+[project.urls]
+Homepage      = "https://github.com/cosminmemetea/canml"
+Documentation = "https://canml.readthedocs.io/"
+Source        = "https://github.com/cosminmemetea/canml"
+Tracker       = "https://github.com/cosminmemetea/canml/issues"
+
+[project.optional-dependencies]
+test = [
+  "pytest>=7.0.0",
+  "coverage",
+  "codecov",
+  "twine",
+  "build"
+]
+
 [build-system]
 requires = ["setuptools>=61.0", "wheel", "build"]
 build-backend = "setuptools.build_meta"
 
-# Include your canml/ directory in the wheel
 [tool.setuptools.package-dir]
 "" = "."
 
