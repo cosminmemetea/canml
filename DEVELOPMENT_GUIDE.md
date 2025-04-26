@@ -149,8 +149,11 @@ To contribute a feature or bug fix:
 
 ## Testing
 
+
 Tests are located in the `tests/` directory and use `pytest`. To run tests:
 ```bash
+pip install pytest-cov
+cd tests
 pytest --cov=canml --cov-report=html
 ```
 - Write unit tests for all new functions.

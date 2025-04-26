@@ -1,90 +1,124 @@
-<!-- Top-level Badges -->
+<!-- Top‐level Badges -->
 [![PyPI version](https://img.shields.io/pypi/v/canml.svg)](https://pypi.org/project/canml/)
 [![Build Status](https://github.com/cosminmemetea/canml/actions/workflows/ci.yml/badge.svg)](https://github.com/cosminmemetea/canml/actions)
-[![Docs](https://readthedocs.org/projects/canml/badge/?version=latest)](https://canml.readthedocs.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-# canml: A Python Library for Preparing CAN Bus Data for Machine Learning
+# canml
 
-## Description
+**canml** is a Python toolkit for production‐scale decoding of CAN bus logs (BLF) using CAN.DBC definitions. It streams large BLF files into pandas DataFrames—either in chunks or all at once—and offers robust CSV and Parquet export, signal‐level filtering, DBC merging, and progress reporting.
 
-`canml` is a Python library designed to facilitate the preparation of Controller Area Network (CAN) bus data for machine learning applications. It provides tools to parse BLF (Bus Log Format) files using CAN.DBC files, preprocess the data, extract features, and export it in formats suitable for machine learning, such as CSV, Excel, and pandas DataFrames. Additionally, it offers visualization tools to aid in data exploration and understanding.
+---
 
-**Why `canml`?**
+## Key Features
 
-While libraries like `cantools` and `python-can` excel in parsing and decoding CAN bus data, they do not focus on preparing this data for machine learning workflows. `canml` fills this gap by providing specialized functions for:
+- **Merge DBC files**  
+  Load one or multiple `.dbc` files into a single `cantools` Database, with optional signal‐name prefixing to avoid collisions.
 
-- Preprocessing time-series CAN data (e.g., handling missing values, resampling).
-- Extracting features relevant for machine learning (e.g., statistical summaries, frequency-domain features).
-- Exporting data in machine learning-ready formats.
-- Integrating with popular machine learning libraries like scikit-learn.
+- **Chunked streaming**  
+  Decode arbitrarily large BLF logs in fixed‐size pandas DataFrame chunks, with an optional progress bar.
 
-This makes `canml` particularly useful for engineers and data scientists working on applications such as anomaly detection, predictive maintenance, and driver behavior analysis in automotive and industrial settings.
+- **Full‐file mode**  
+  Load an entire BLF into one DataFrame, with optional message‐ID filtering, uniform timestamp spacing, and injection of expected signals (NaN‐filled if missing).
 
-## Features
+- **Flexible export**  
+  Incremental CSV export (`to_csv`) or single‐shot Parquet export (`to_parquet`).
 
-- Parse BLF files using CAN.DBC files to decode CAN messages into meaningful signals.
-- Preprocess data:
-  - Handle missing values with interpolation or forward fill.
-  - Resample time-series data to a uniform grid.
-  - Normalize or standardize signals.
-- Extract features:
-  - Statistical features (mean, standard deviation, min, max) over sliding windows.
-  - Frequency-domain features (FFT, power spectral density).
-  - Custom feature engineering based on domain knowledge.
-- Export data to:
-  - CSV and Excel for reporting and sharing.
-  - pandas DataFrames and NumPy arrays for machine learning.
-- Visualization:
-  - Time-series plots of signals.
-  - Histograms and correlation matrices for data exploration.
-- Machine learning integration:
-  - Scikit-learn-compatible API for use in ML pipelines.
-  - High-level functions for common tasks like anomaly detection.
+- **Signal & message filtering**  
+  Only decode specified CAN IDs or automatically add missing signals for downstream consistency.
+
+---
 
 ## Installation
-
-To install `canml`, use pip:
 
 ```bash
 pip install canml
 ```
 
 **Dependencies**:
-- Python 3.7+
-- pandas
-- NumPy
-- scikit-learn
-- matplotlib
-- cantools (optional, for enhanced BLF parsing)
 
-## Usage
+- Python ≥ 3.8, < 4.0
+- cantools ≥ 39.4.4
+- python-can ≥ 4.4.0
+- pandas ≥ 2.2.2
+- numpy ≥ 1.26.4
+- tqdm ≥ 4.0.0
+- pyarrow ≥ 11.0.0
 
-Below is an example of how to use `canml` to load a BLF file, preprocess the data, extract features, and export it to CSV.
+## Usage Quickstart
 
-```python
-import canml
-import pandas as pd
+```bash
+    from canml.canmlio import (
+        load_dbc_files,
+        iter_blf_chunks,
+        load_blf,
+        to_csv,
+        to_parquet
+    )
 
-# Load BLF and DBC files
-data = canml.io.load_blf('data.blf', 'config.dbc')
+    # 1. Merge multiple DBCs (with optional signal‐prefixing)
+    db = load_dbc_files(["powertrain.dbc", "chassis.dbc"], prefix_signals=True)
 
-# Preprocess data
-data_clean = canml.preprocess.handle_missing(data, method='interpolate')
-data_resampled = canml.preprocess.resample(data_clean, freq='100ms')
-data_normalized = canml.preprocess.normalize(data_resampled)
+    # 2. Stream‐decode a large BLF in 50k‐row chunks, filtering only IDs 0x100 & 0x200
+    for idx, df_chunk in enumerate(iter_blf_chunks(
+            blf_path="vehicle.blf",
+            db=db,
+            chunk_size=50_000,
+            filter_ids={0x100, 0x200}
+        )):
+        to_parquet(df_chunk, f"shard-{idx:03}.parquet")
 
-# Extract features
-features = canml.features.extract_stats(data_normalized, window='1s', stats=['mean', 'std'])
+    # 3. Load a smaller BLF fully, enforce uniform 10 ms timestamps,
+    #    and ensure specific signals (even if missing) appear as NaN
+    df_full = load_blf(
+        blf_path="session0.blf",
+        db=db,
+        message_ids={0x100, 0x200},
+        expected_signals=["EngineData_EngineRPM", "BrakeStatus_ABSActive"],
+        force_uniform_timing=True,
+        interval_seconds=0.01
+    )
 
-# Export to CSV
-canml.export.to_csv(features, 'output.csv')
+    # 4. Export to CSV
+    to_csv(df_full, "session0_decoded.csv")
 
-# Visualize data
-canml.viz.plot_timeseries(data_normalized, signals=['EngineRPM', 'VehicleSpeed'])
 ```
 
-For advanced usage, such as integrating with scikit-learn for anomaly detection, refer to the [documentation](https://canml.readthedocs.io/).
+API Reference
+
+**load_dbc_files(dbc_paths, prefix_signals=False) → Database**
+      
+    Load one or more DBC files into a merged cantools Database.
+
+    dbc_paths – single path or list of .dbc file paths
+
+    prefix_signals – if True, renames signals to "<MessageName>_<SignalName>".
+
+**iter_blf_chunks(blf_path, db, chunk_size=10000, filter_ids=None) → Iterator[DataFrame]**
+    Stream‐decode a BLF into DataFrame chunks.
+
+    blf_path – path to .blf file
+
+    db – Database from load_dbc_files
+
+    chunk_size – max rows per DataFrame
+
+    filter_ids – set of CAN IDs to include
+
+**load_blf(blf_path, db, message_ids=None, expected_signals=None, force_uniform_timing=False, interval_seconds=0.01) → DataFrame**
+    Decode an entire BLF into one DataFrame.
+
+    message_ids – restrict to given CAN IDs
+
+    expected_signals – list of columns to inject as NaN if missing
+
+    force_uniform_timing – override raw timestamps with uniform spacing
+
+**to_csv(df_or_iter, output_path, mode='w', header=True) → None**
+    Write DataFrame or iterator of DataFrames to CSV.
+
+    to_parquet(df, output_path, compression='snappy') → None
+    Write DataFrame to Parquet (pyarrow engine).
+
 
 ## Contributing
 
@@ -108,4 +142,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Contact
 
-For questions or support, please open an issue on the [GitHub repository](https://github.com/canml/canml).
+For questions or support, please open an issue on the [GitHub repository](https://github.com/cosminmemetea/canml).
