@@ -2,3 +2,5 @@ cantools==39.4.4
 python-can==4.4.0
 pandas==2.2.2
 numpy==1.26.4
+tqdm>=4.0.0         # for progress bars in chunked reads
+pyarrow>=11.0.0     # for Parquet export

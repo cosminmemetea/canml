@@ -1,10 +1,18 @@
-# canml/__init__.py
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 """
 Top-level package for canml.
 
-Expose the most common functions so users can:
-    from canml import load_blf, to_csv
+Expose the most common functions so users can do:
+    from canml import load_blf, to_csv, to_parquet
 """
-from .canmlio import load_blf, to_csv
-__all__ = ["load_blf", "to_csv"]
+
+from .canmlio import load_dbc_files, iter_blf_chunks, load_blf, to_csv, to_parquet
+
+__all__ = [
+    "load_dbc_files",
+    "iter_blf_chunks",
+    "load_blf",
+    "to_csv",
+    "to_parquet",
+    "__version__",
+]
