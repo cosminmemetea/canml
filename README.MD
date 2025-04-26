@@ -1,3 +1,9 @@
+<!-- Top-level Badges -->
+[![PyPI version](https://img.shields.io/pypi/v/canml.svg)](https://pypi.org/project/canml/)
+[![Build Status](https://github.com/cosminmemetea/canml/actions/workflows/ci.yml/badge.svg)](https://github.com/cosminmemetea/canml/actions)
+[![Docs](https://readthedocs.org/projects/canml/badge/?version=latest)](https://canml.readthedocs.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 # canml: A Python Library for Preparing CAN Bus Data for Machine Learning
 
 ## Description
