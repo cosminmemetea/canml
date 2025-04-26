@@ -10,7 +10,7 @@ import logging
 # Ensure project root is on sys.path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
-from canmlio.canmlio import load_blf, to_csv
+from canml.canmlio import load_blf, to_csv
 
 class TestCanmlioIntegration(unittest.TestCase):
     @classmethod

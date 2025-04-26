@@ -10,7 +10,7 @@ import logging
 # Adjust sys.path to include the project_root for importing canmlio
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
-from canmlio import canmlio
+from canml import canmlio
 
 class TestCanmlio(unittest.TestCase):
     @classmethod
