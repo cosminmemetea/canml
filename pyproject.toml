@@ -2,7 +2,7 @@
 name = "canml"
 version = "0.1.0"
 description = "Decode CAN BLF logs using DBC files into pandas DataFrames and export to CSV"
-readme = "README.MD"
+readme = { file = "README.MD", content-type = "text/markdown" }
 authors = [
   { name = "Cosmin B. Memetea", email = "cosmin.memetea@gmail.com" }
 ]
@@ -15,6 +15,7 @@ dependencies = [
   "numpy==1.26.4"
 ]
 
+# Optional extra dependencies (e.g. for testing)
 [project.optional-dependencies]
 test = [
   "pytest>=7.0.0",
@@ -24,6 +25,32 @@ test = [
   "build"
 ]
 
+# Add useful links on PyPI
+urls = { 
+  "Homepage"      = "https://github.com/cosminmemetea/canml",
+  "Documentation" = "https://canml.readthedocs.io/",
+  "Source"        = "https://github.com/cosminmemetea/canml",
+  "Tracker"       = "https://github.com/cosminmemetea/canml/issues"
+}
+
+# Classifiers power search & badges on PyPI
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
 [build-system]
 requires = ["setuptools>=61.0", "wheel", "build"]
 build-backend = "setuptools.build_meta"
+
+# Tell setuptools to include your canml package directory
+[tool.setuptools.package-dir]
+"" = "."
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["canml", "canml.*"]
