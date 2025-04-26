@@ -15,6 +15,14 @@ dependencies = [
   "numpy==1.26.4"
 ]
 
+# Project URLs
+[project.urls]
+Homepage      = "https://github.com/cosminmemetea/canml"
+Documentation = "https://canml.readthedocs.io/"
+Source        = "https://github.com/cosminmemetea/canml"
+Tracker       = "https://github.com/cosminmemetea/canml/issues"
+
+# Optional extras
 [project.optional-dependencies]
 test = [
   "pytest>=7.0.0",
@@ -24,15 +32,7 @@ test = [
   "build"
 ]
 
-[project.urls]
-Homepage      = "https://github.com/cosminmemetea/canml"
-Documentation = "https://canml.readthedocs.io/"
-Source        = "https://github.com/cosminmemetea/canml"
-Tracker       = "https://github.com/cosminmemetea/canml/issues"
-
-[project.classifiers]
-# PEP 621 expects classifiers as an array, not a separate table;
-# but setuptools will pick them up from here.
+# Trove classifiers must be an array under [project]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
@@ -46,9 +46,10 @@ classifiers = [
 requires = ["setuptools>=61.0", "wheel", "build"]
 build-backend = "setuptools.build_meta"
 
+# Include your canml/ directory in the wheel
 [tool.setuptools.package-dir]
 "" = "."
 
 [tool.setuptools.packages.find]
-where = ["."]
+where  = ["."]
 include = ["canml", "canml.*"]
