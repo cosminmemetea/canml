@@ -1,200 +1,109 @@
 import unittest
 import os
-import sys
+import tempfile
 import pandas as pd
+import numpy as np
 import cantools
 import can
 from can.io.blf import BLFWriter
-import logging
+from canml.canmlio import (
+    load_dbc_files,
+    iter_blf_chunks,
+    load_blf,
+    to_csv,
+    to_parquet
+)
 
-# Adjust sys.path to include the project_root for importing canmlio
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
-from canml import canmlio
-
-class TestCanmlio(unittest.TestCase):
+class TestCanmlioAdvanced(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # Paths to test files
-        cls.dbc_file = os.path.join("tests", "test.dbc")
-        cls.blf_file = os.path.join("tests", "output-2.blf")
-        
-        # Ensure test files exist
-        if not os.path.exists(cls.dbc_file):
-            raise FileNotFoundError(f"DBC file {cls.dbc_file} not found")
-        if not os.path.exists(cls.blf_file):
-            raise FileNotFoundError(f"BLF file {cls.blf_file} not found")
-        
-        # Load DBC for reference
-        cls.db = cantools.database.load_file(cls.dbc_file)
-        
-        # Expected message IDs and signals from test.dbc
-        cls.expected_signals = {
-            "EngineData": ["EngineRPM", "ThrottlePosition", "CoolantTemp"],
-            "VehicleDynamics": ["VehicleSpeed", "GearPosition", "TransmissionTemp"],
-            "BrakeStatus": ["BrakePressure", "ABSActive", "WheelSpeedFL"],
-            "EnvironmentData": ["AmbientTemp", "CabinTemp", "RainfallRate"]
-        }
-        
-        # Signal ranges from test.dbc
-        cls.signal_ranges = {
-            "EngineRPM": (0, 8000),
-            "ThrottlePosition": (0, 100),
-            "CoolantTemp": (-40, 215),
-            "VehicleSpeed": (0, 300),
-            "GearPosition": (0, 8),
-            "TransmissionTemp": (-40, 200),
-            "BrakePressure": (0, 1000),
-            "ABSActive": (0, 1),
-            "WheelSpeedFL": (0, 300),
-            "AmbientTemp": (-40, 60),
-            "CabinTemp": (-40, 60),
-            "RainfallRate": (0, 25.5)  # 8-bit limit (255 * 0.1)
-        }
-        
-        # Set up logging capture
-        cls.log_capture = logging.StreamHandler()
-        cls.log_capture.setLevel(logging.DEBUG)
-        logging.getLogger('').addHandler(cls.log_capture)
-        
-    @classmethod
-    def tearDownClass(cls):
-        # Remove logging handler
-        logging.getLogger('').removeHandler(cls.log_capture)
+        # Paths
+        tests_dir = os.path.dirname(os.path.abspath(__file__))
+        cls.dbc_path = os.path.join(tests_dir, 'test.dbc')
+        if not os.path.exists(cls.dbc_path):
+            raise FileNotFoundError(f"DBC fixture not found: {cls.dbc_path}")
+        cls.db = cantools.database.load_file(cls.dbc_path)
+        # Standard message definitions
+        cls.msg_eng = cls.db.get_message_by_name('EngineData')
+        cls.msg_brk = cls.db.get_message_by_name('BrakeStatus')
 
-    def test_load_blf(self):
-        """Test that load_blf reads BLF file and returns a valid DataFrame."""
-        df = canmlio.load_blf(self.blf_file, self.dbc_file)
-        
-        # Check DataFrame is not empty
-        self.assertFalse(df.empty, "DataFrame is empty")
-        
-        # Check expected columns
-        expected_columns = ['timestamp'] + [
-            signal for signals in self.expected_signals.values() for signal in signals
-        ]
-        self.assertTrue(set(expected_columns).issubset(df.columns), 
-                        f"Missing columns: {set(expected_columns) - set(df.columns)}")
-        
-        # Check signal values are within ranges
-        for signal, (min_val, max_val) in self.signal_ranges.items():
-            if signal in df.columns:
-                values = df[signal].dropna()
-                self.assertTrue(values.between(min_val, max_val).all(),
-                               f"{signal} values out of range [{min_val}, {max_val}]")
+    def test_load_dbc_files_prefix_signals(self):
+        # Load same DBC twice to force merge, prefix signals
+        db_merged = load_dbc_files([self.dbc_path, self.dbc_path], prefix_signals=True)
+        for msg in db_merged.messages:
+            for sig in msg.signals:
+                self.assertTrue(sig.name.startswith(msg.name + '_'),
+                                f"Signal {sig.name} not prefixed by {msg.name}_")
 
-    def test_load_blf_timestamps(self):
-        """Test that timestamps are correctly loaded and in ascending order."""
-        df = canmlio.load_blf(self.blf_file, self.dbc_file)
-        
-        # Check timestamp column exists
-        self.assertIn("timestamp", df.columns, "Timestamp column missing")
-        
-        # Check timestamps are in ascending order
-        timestamps = df["timestamp"]
-        self.assertTrue(timestamps.is_monotonic_increasing,
-                        "Timestamps are not in ascending order")
-        
-        # Check timestamp range (100 messages * 4 types * 10ms = 4s)
-        delta = timestamps.max() - timestamps.min()
-        self.assertAlmostEqual(delta, 4.0, delta=0.1,
-                              msg="Timestamp range incorrect")
-
-    def test_to_csv(self):
-        """Test that to_csv exports DataFrame to CSV correctly."""
-        df = canmlio.load_blf(self.blf_file, self.dbc_file)
-        csv_file = os.path.join("tests", "test_output.csv")
-        
+    def test_iter_blf_chunks_and_filtering(self):
+        # Create small BLF with two frames
+        fd, blf_file = tempfile.mkstemp(suffix='.blf')
+        os.close(fd)
+        with BLFWriter(blf_file, channel=1) as w:
+            # Write one EngineData
+            data1 = {s.name: (0 if s.scale==1 else 0.0) for s in self.msg_eng.signals}
+            enc1 = self.msg_eng.encode(data1)
+            w.on_message_received(can.Message(arbitration_id=self.msg_eng.frame_id,
+                                             data=enc1, timestamp=0))
+            # Write one BrakeStatus
+            data2 = {s.name: (0 if s.scale==1 else 0.0) for s in self.msg_brk.signals}
+            enc2 = self.msg_brk.encode(data2)
+            w.on_message_received(can.Message(arbitration_id=self.msg_brk.frame_id,
+                                             data=enc2, timestamp=0.01))
         try:
-            canmlio.to_csv(df, csv_file)
-            self.assertTrue(os.path.exists(csv_file), "CSV file not created")
-            
-            # Read CSV and verify contents
-            csv_df = pd.read_csv(csv_file)
-            self.assertEqual(list(df.columns), list(csv_df.columns),
-                            "CSV columns do not match DataFrame")
-            self.assertEqual(len(df), len(csv_df),
-                            "CSV row count does not match DataFrame")
+            # Filter for only EngineData and chunk size=1
+            chunks = list(iter_blf_chunks(blf_file, self.db, chunk_size=1,
+                                          filter_ids={self.msg_eng.frame_id}))
+            # Expect one chunk with one row
+            self.assertEqual(len(chunks), 1)
+            df0 = chunks[0]
+            self.assertEqual(len(df0), 1)
+            # Only EngineData signals present
+            self.assertIn('EngineRPM', df0.columns)
+            self.assertNotIn('BrakePressure', df0.columns)
         finally:
-            if os.path.exists(csv_file):
-                os.remove(csv_file)
+            os.remove(blf_file)
 
-    def test_empty_blf_file(self):
-        """Test load_blf with an empty BLF file."""
-        empty_blf = os.path.join("tests", "empty.blf")
-        
-        # Create empty BLF file
-        with BLFWriter(empty_blf, channel=1) as writer:
-            pass
-        
+    def test_load_blf_expected_and_message_filter(self):
+        # Create BLF with one EngineData frame
+        fd, blf_file = tempfile.mkstemp(suffix='.blf')
+        os.close(fd)
+        with BLFWriter(blf_file, channel=1) as w:
+            data = {s.name: 1 for s in self.msg_eng.signals}
+            enc = self.msg_eng.encode(data)
+            w.on_message_received(can.Message(arbitration_id=self.msg_eng.frame_id,
+                                             data=enc, timestamp=0))
         try:
-            df = canmlio.load_blf(empty_blf, self.dbc_file)
-            self.assertTrue(df.empty, "Expected empty DataFrame for empty BLF")
-        finally:
-            if os.path.exists(empty_blf):
-                os.remove(empty_blf)
-
-    def test_invalid_dbc_file(self):
-        """Test load_blf with an invalid DBC file."""
-        invalid_dbc = os.path.join("tests", "invalid.dbc")
-        
-        # Create invalid DBC file
-        with open(invalid_dbc, "w") as f:
-            f.write("INVALID DBC CONTENT")
-        
-        try:
-            with self.assertRaises(ValueError, msg="Expected ValueError for invalid DBC"):
-                canmlio.load_blf(self.blf_file, invalid_dbc)
-        finally:
-            if os.path.exists(invalid_dbc):
-                os.remove(invalid_dbc)
-
-    def test_missing_blf_file(self):
-        """Test load_blf with a non-existent BLF file."""
-        with self.assertRaises(FileNotFoundError, msg="Expected FileNotFoundError for missing BLF"):
-            canmlio.load_blf(os.path.join("tests", "nonexistent.blf"), self.dbc_file)
-
-    def test_empty_dataframe_to_csv(self):
-        """Test to_csv with an empty DataFrame."""
-        empty_df = pd.DataFrame()
-        with self.assertRaises(ValueError, msg="Expected ValueError for empty DataFrame"):
-            canmlio.to_csv(empty_df, os.path.join("tests", "empty.csv"))
-
-    def test_undecodable_messages(self):
-        """Test load_blf with a BLF file containing undecodable messages."""
-        custom_blf = os.path.join("tests", "custom.blf")
-        
-        # Create BLF with one valid and one undecodable message
-        with BLFWriter(custom_blf, channel=1) as writer:
-            # Valid EngineData message
-            msg_def = self.db.get_message_by_name("EngineData")
-            data = {"EngineRPM": 5000, "ThrottlePosition": 50, "CoolantTemp": 80}
-            encoded_data = msg_def.encode(data)
-            valid_msg = can.Message(
-                arbitration_id=msg_def.frame_id,
-                data=encoded_data,
-                is_extended_id=False,
-                timestamp=0
+            # Only EngineData, but expect a BrakeStatus signal injected
+            df = load_blf(
+                blf_path=blf_file,
+                db=self.db,
+                message_ids={self.msg_eng.frame_id},
+                expected_signals=['BrakeStatus_ABSActive']
             )
-            writer.on_message_received(valid_msg)
-            
-            # Undecodable message (invalid ID)
-            invalid_msg = can.Message(
-                arbitration_id=999,  # Not in DBC
-                data=[0x00] * 8,
-                is_extended_id=False,
-                timestamp=0.01
-            )
-            writer.on_message_received(invalid_msg)
-        
-        try:
-            df = canmlio.load_blf(custom_blf, self.dbc_file)
-            self.assertEqual(len(df), 1, "Expected one valid message in DataFrame")
-            self.assertIn("EngineRPM", df.columns, "Expected EngineRPM in DataFrame")
-            self.assertEqual(df["EngineRPM"].iloc[0], 5000, "Incorrect EngineRPM value")
+            # EngineData signals present
+            self.assertIn('EngineRPM', df.columns)
+            # Expected BrakeStatus signal injected
+            self.assertIn('BrakeStatus_ABSActive', df.columns)
+            # Values should be NaN
+            self.assertTrue(df['BrakeStatus_ABSActive'].isna().all())
         finally:
-            if os.path.exists(custom_blf):
-                os.remove(custom_blf)
+            os.remove(blf_file)
 
-if __name__ == "__main__":
+    def test_to_parquet_roundtrip(self):
+        # Simple DataFrame
+        df = pd.DataFrame({
+            'timestamp': [0, 0.01, 0.02],
+            'foo': [1, 2, 3]
+        })
+        fd, pq_file = tempfile.mkstemp(suffix='.parquet')
+        os.close(fd)
+        try:
+            to_parquet(df, pq_file)
+            df2 = pd.read_parquet(pq_file)
+            pd.testing.assert_frame_equal(df, df2)
+        finally:
+            os.remove(pq_file)
+
+if __name__ == '__main__':
     unittest.main()

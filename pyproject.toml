@@ -12,7 +12,9 @@ dependencies = [
   "cantools==39.4.4",
   "python-can==4.4.0",
   "pandas==2.2.2",
-  "numpy==1.26.4"
+  "numpy==1.26.4",
+  "tqdm>=4.0.0",
+  "pyarrow>=11.0.0"
 ]
 
 # Trove classifiers must be a top-level array under [project]
