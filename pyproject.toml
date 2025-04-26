@@ -1,12 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "canml"
-version = "0.1.0p2"
-description = "Decode CAN BLF logs using DBC files into pandas DataFrames and export to CSV"
-readme = { file = "README.MD", content-type = "text/markdown" }
+version = "0.1.0p1"
+description = "Decode CAN BLF logs using DBC files into pandas DataFrames and export to CSV or JSON"
+readme = "README.MD"
 authors = [
   { name = "Cosmin B. Memetea", email = "cosmin.memetea@gmail.com" }
 ]
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 requires-python = ">=3.8"
 dependencies = [
   "cantools==39.4.4",
@@ -14,39 +18,42 @@ dependencies = [
   "pandas==2.2.2",
   "numpy==1.26.4"
 ]
-
-[project.optional-dependencies]
-test = [
-  "pytest>=7.0.0",
-  "coverage",
-  "codecov",
-  "twine",
-  "build"
-]
-
-# Project links that show up on PyPI
-urls = { 
-  Homepage = "https://github.com/cosminmemetea/canml",
-  Documentation = "https://canml.readthedocs.io/",
-  Source = "https://github.com/cosminmemetea/canml",
-  Tracker = "https://github.com/cosminmemetea/canml/issues"
-}
-
-# Classifiers power search & badges on PyPI
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.8",
-  "Topic :: Scientific/Engineering :: Information Analysis"
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Operating System :: OS Independent"
 ]
 
-[build-system]
-requires = ["setuptools>=61.0", "wheel", "build"]
-build-backend = "setuptools.build_meta"
+[project.optional-dependencies]
+test = [
+  "pytest>=7.0.0",
+  "pytest-cov>=4.0.0",
+  "coverage>=7.0.0",
+  "codecov>=2.1.12"
+]
+dev = [
+  "twine>=4.0.0",
+  "build>=1.0.0"
+]
 
-# Tell setuptools to find your canml package
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["canml", "canml.*"]
+[project.urls]
+Homepage = "https://github.com/cosminmemetea/canml"
+Documentation = "https://canml.readthedocs.io/"
+Source = "https://github.com/cosminmemetea/canml"
+"Bug Tracker" = "https://github.com/cosminmemetea/canml/issues"
+
+[tool.setuptools]
+packages = ["canml"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+canml = ["LICENSE"]
