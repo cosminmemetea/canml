@@ -131,6 +131,11 @@ Contributions are welcome! To contribute:
 1. Fork the repository on GitHub.
 2. Create a new branch for your feature or bug fix.
 3. Submit a pull request with a clear description of your changes.
+4. To update the docu:
+ 
+ ```bash
+pip install sphinx sphinx-rtd-theme
+```
 
 Please open an issue to discuss major changes before starting work.
 
