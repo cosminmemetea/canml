@@ -3,11 +3,14 @@ Module: tests/test_load_blf.py
 
 This test suite verifies the behavior of the `load_blf` function
 in the `canml.canmlio` module. It uses Python’s built-in `unittest` framework
-to ensure correct file-not-found behavior, DB loading via `load_dbc_files`,
-chunk concatenation, uniform timing, expected signal injection, and ordering.
+to ensure correct file-not-found behavior, Database instance handling,
+how DBC paths are loaded, chunk concatenation, uniform timing,
+expected signal injection, and column ordering.
 
 Test Cases:
-  - Missing BLF or DBC files raise FileNotFoundError
+  - Missing BLF path raises FileNotFoundError
+  - Missing DBC path raises FileNotFoundError
+  - Passing a Database instance skips load_dbc_files
   - Passing a DBC path string uses load_dbc_files internally
   - Concatenation of DataFrame chunks from iter_blf_chunks
   - force_uniform_timing overwrites timestamps correctly
@@ -23,6 +26,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pandas as pd
+from cantools.database import Database
 import canml.canmlio as ci
 from canml.canmlio import load_blf
 
@@ -31,7 +35,7 @@ class TestLoadBlf(unittest.TestCase):
     TestCase covering load_blf functionality.
     """
     def setUp(self):
-        # Temporary BLF and DBC paths
+        # Set up temporary directory with BLF and DBC dummy files
         self.tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tempdir.cleanup)
         self.blf_path = Path(self.tempdir.name) / 'test.blf'
@@ -41,22 +45,34 @@ class TestLoadBlf(unittest.TestCase):
 
     def test_missing_blf_raises(self):
         """
-        Non-existent BLF path should raise FileNotFoundError.
+        Non-existent BLF path should raise FileNotFoundError,
+        even when a Database instance is provided.
         """
         missing_blf = Path(self.tempdir.name) / 'no.blf'
-        # Patch DBC loading so we reach BLF existence check
-        fake_db = MagicMock()
-        with patch('canml.canmlio.load_dbc_files', return_value=fake_db):
-            with self.assertRaises(FileNotFoundError):
-                load_blf(str(missing_blf), str(self.dbc_path))
+        fake_db = Database()
+        with self.assertRaises(FileNotFoundError):
+            load_blf(str(missing_blf), fake_db)
 
     def test_missing_dbc_raises(self):
         """
-        Non-existent DBC path should raise FileNotFoundError.
+        Non-existent DBC path string should raise FileNotFoundError.
         """
         missing_dbc = Path(self.tempdir.name) / 'no.dbc'
         with self.assertRaises(FileNotFoundError):
             load_blf(str(self.blf_path), str(missing_dbc))
+
+    def test_pass_database_instance_skips_load_dbc(self):
+        """
+        Passing an existing Database instance should skip load_dbc_files.
+        """
+        db_inst = Database()
+        # Ensure load_dbc_files is not called
+        with patch('canml.canmlio.load_dbc_files') as mock_load:
+            # Provide no chunks, expect empty DataFrame
+            with patch('canml.canmlio.iter_blf_chunks', return_value=[]):
+                df = load_blf(str(self.blf_path), db_inst)
+        mock_load.assert_not_called()
+        self.assertTrue(df.empty)
 
     def test_dbc_path_string_calls_load_dbc_files(self):
         """
