@@ -2,6 +2,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/canml.svg)](https://pypi.org/project/canml/)
 [![Build Status](https://github.com/cosminmemetea/canml/actions/workflows/ci.yml/badge.svg)](https://github.com/cosminmemetea/canml/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Documentation Status](https://readthedocs.org/projects/canml/badge/?version=latest)](https://canml.readthedocs.io/)
 
 # canml
 
