@@ -83,7 +83,7 @@ pip install canml
 
 ```
 
-API Reference
+## API Reference
 
 **load_dbc_files(dbc_paths, prefix_signals=False) → Database**
       
@@ -94,6 +94,7 @@ API Reference
     prefix_signals – if True, renames signals to "<MessageName>_<SignalName>".
 
 **iter_blf_chunks(blf_path, db, chunk_size=10000, filter_ids=None) → Iterator[DataFrame]**
+
     Stream‐decode a BLF into DataFrame chunks.
 
     blf_path – path to .blf file
@@ -105,6 +106,7 @@ API Reference
     filter_ids – set of CAN IDs to include
 
 **load_blf(blf_path, db, message_ids=None, expected_signals=None, force_uniform_timing=False, interval_seconds=0.01) → DataFrame**
+
     Decode an entire BLF into one DataFrame.
 
     message_ids – restrict to given CAN IDs
@@ -114,9 +116,11 @@ API Reference
     force_uniform_timing – override raw timestamps with uniform spacing
 
 **to_csv(df_or_iter, output_path, mode='w', header=True) → None**
+
     Write DataFrame or iterator of DataFrames to CSV.
 
     to_parquet(df, output_path, compression='snappy') → None
+    
     Write DataFrame to Parquet (pyarrow engine).
 
 
