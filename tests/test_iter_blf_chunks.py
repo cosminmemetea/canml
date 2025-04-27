@@ -21,8 +21,6 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-import pandas as pd
-import canml.canmlio as ci
 from canml.canmlio import iter_blf_chunks
 
 # Dummy message to simulate BLFReader outputs

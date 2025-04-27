@@ -27,7 +27,6 @@ from unittest.mock import patch, MagicMock
 
 import pandas as pd
 from cantools.database import Database
-import canml.canmlio as ci
 from canml.canmlio import load_blf
 
 class TestLoadBlf(unittest.TestCase):
