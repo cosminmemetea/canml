@@ -20,8 +20,8 @@ Installation
 ------------
 .. code-block:: console
 
-    pip install canmlio
-    
+    pip install canml
+
 Quickstart
 ----------
 .. code-block:: python
