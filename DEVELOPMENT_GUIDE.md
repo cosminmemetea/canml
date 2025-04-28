@@ -120,7 +120,12 @@ To contribute a feature or bug fix:
 4. **Test Your Changes**:
    - Run tests with:
      ```bash
-     pytest --cov=canml
+     pytest \
+      --cov=canml \
+      --cov-report=term-missing \
+      --cov-report=html \
+      -v
+
 
      python -m unittest tests.test_integration_canmlio -v
      python -m unittest tests.test_canmlio -v
