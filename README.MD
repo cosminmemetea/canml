@@ -3,7 +3,7 @@
 [![Build Status](https://github.com/cosminmemetea/canml/actions/workflows/ci.yml/badge.svg)](https://github.com/cosminmemetea/canml/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Documentation Status](https://readthedocs.org/projects/canml/badge/?version=latest)](https://canml.readthedocs.io/)
-[![Downloads last month](https://img.shields.io/pypistats/monthly-downloads/canml?label=Downloads%20(last%20month))](https://pypistats.org/packages/canml)
+[![PyPI - Downloads](https://img.shields.io/pypi/dm/canml?style=flat-square)](https://pypistats.org/packages/canml)
 
 # canml
 
