@@ -1,173 +1,151 @@
+import pytest
+import pytest
+import cantools.database.errors as db_errors
+
+import canml.canmlio as canmlio
+
 """
 Module: tests/test_load_dbc_files.py
 
-This test suite verifies the behavior of the `load_dbc_files` function
-in the `canml.canmlio` module. It uses Python's built-in `unittest`
-framework with a fake database stub to isolate file-loading logic,
-error handling, and optional signal name prefixing.
+This test suite verifies the behavior of the `load_dbc_files` function in the
+`canml.canmlio` module using pytest. It ensures correct merging of DBC files,
+error handling for missing or invalid files, prefixing signals, and collision detection.
 
 Test Cases:
-  - File not found raises FileNotFoundError
-  - Invalid DBC loading raises ValueError
-  - Single and multiple DBC file loading calls add_dbc_file correctly
-  - prefix_signals=True renames all signals by prefixing with message names
-  - prefix_signals=False leaves signal names unchanged
+  - Single valid DBC path loads correctly
+  - Multiple valid DBC paths merge messages
+  - Nonexistent DBC path raises FileNotFoundError
+  - Empty DBC paths raises ValueError
+  - ParseError in add_dbc_file raises ValueError with parse message
+  - Other exceptions in add_dbc_file raises ValueError invalid message
+  - Duplicate signal names without prefix raises ValueError
+  - Duplicate message names with prefix_signals=True raises ValueError
+  - prefix_signals renames signal names with message prefixes
+
+Best Practices:
+  - Uses pytest tmp_path fixture for temporary files
+  - Monkeypatches CantoolsDatabase for dependency isolation
+  - Verifies error messages and states
+
+Prerequisites:
+  pip install pytest cantools
 
 To execute:
-    python -m unittest tests/test_load_dbc_files.py
+    pytest tests/test_load_dbc_files.py -v
 """
-import unittest
-import tempfile
-from pathlib import Path
-from unittest.mock import patch
 
-import canml.canmlio as ci
-from canml.canmlio import load_dbc_files
-
-
-def create_dummy_messages(names, signals):
-    """
-    Generate dummy message instances for testing.
-
-    Each dummy message has:
-      - name: the message name
-      - signals: list of DummySignal objects initialized with given signal names
-
-    Returns a list of DummyMsg instances.
-    """
-    class DummySignal:
-        """Represents a CAN signal with a mutable name attribute."""
-        def __init__(self, name):
-            self.name = name
-
-    class DummyMsg:
-        """Represents a CAN message holding multiple DummySignal objects."""
-        def __init__(self, name, signals):
-            self.name = name
-            self.signals = [DummySignal(sig) for sig in signals]
-
-    return [DummyMsg(n, signals) for n in names]
-
-
-class FakeDatabase:
-    """
-    Stub implementation of cantools.database.Database for load_dbc_files tests.
-
-    Attributes:
-      - messages: injected dummy messages for prefixing tests
-      - added_paths: record of DBC file paths passed to add_dbc_file
-    """
-    def __init__(self, dummy_messages=None):
-        self.messages = dummy_messages or []
-        self.added_paths = []
+class FakeDB:
+    """Fake CantoolsDatabase substitute recording DBC additions and holding messages."""
+    def __init__(self):
+        self.added = []
+        self.messages = []
 
     def add_dbc_file(self, path):
-        """
-        Simulate loading a DBC file by recording its path.
-        """
-        self.added_paths.append(path)
+        self.added.append(path)
 
 
-class TestLoadDbcFiles(unittest.TestCase):
-    """
-    TestCase covering all behaviors of load_dbc_files:
-      - File existence checks
-      - Invalid DBC handling
-      - Single/multiple file loading
-      - Signal prefixing logic
-    """
+@pytest.fixture(autouse=True)
+def disable_cantools_loader(monkeypatch):
+    """Prevent actual CantoolsDatabase usage by patching reference in module."""
+    monkeypatch.setattr(canmlio, 'CantoolsDatabase', FakeDB)
 
-    def setUp(self):
-        """
-        Prepare a temporary DBC file for existence validation.
-        """
-        self.tempdir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tempdir.cleanup)
-        self.real_dbc = Path(self.tempdir.name) / 'one.dbc'
-        # Write a dummy file to satisfy file existence
-        self.real_dbc.write_text('dummy')
+def test_single_valid(tmp_path):
+    """Loading a single valid DBC file should record one add_dbc_file call."""
+    p = tmp_path / "a.dbc"
+    p.write_text('VERSION "1"')
+    db = canmlio.load_dbc_files(str(p))
+    assert isinstance(db, FakeDB)
+    assert db.added == [str(p)]
 
-    def test_missing_file_raises(self):
-        """
-        Passing a non-existent path should raise FileNotFoundError.
-        """
-        missing = Path(self.tempdir.name) / 'absent.dbc'
-        with self.assertRaises(FileNotFoundError):
-            load_dbc_files(str(missing))
+def test_multiple_valid(tmp_path):
+    """Loading multiple DBCs merges calls in order."""
+    p1 = tmp_path / "x.dbc"
+    p2 = tmp_path / "y.dbc"
+    p1.write_text('VERSION "1"')
+    p2.write_text('VERSION "2"')
+    db = canmlio.load_dbc_files([str(p1), str(p2)])
+    assert isinstance(db, FakeDB)
+    assert db.added == [str(p1), str(p2)]
 
-    def test_invalid_dbc_raises_value(self):
-        """
-        Simulate an invalid DBC by patching add_dbc_file to throw,
-        expecting a ValueError from load_dbc_files.
-        """
-        with patch('canml.canmlio.Database', return_value=ci.Database()):
-            with patch.object(ci.Database, 'add_dbc_file', side_effect=Exception('invalid')):
-                with self.assertRaises(ValueError):
-                    load_dbc_files(str(self.real_dbc))
+def test_missing_path(tmp_path):
+    """Missing DBC path should raise FileNotFoundError."""
+    missing = tmp_path / "no.dbc"
+    with pytest.raises(FileNotFoundError):
+        canmlio.load_dbc_files(str(missing))
 
-    def test_single_and_multiple_dbc_loading(self):
-        """
-        Validate that add_dbc_file is called exactly once for a single path,
-        and once per path for multiple inputs, returning the stub DB.
-        """
-        fake_db = FakeDatabase()
-        with patch('canml.canmlio.Database', return_value=fake_db):
-            # Single-file load
-            db1 = load_dbc_files(str(self.real_dbc), prefix_signals=False)
-            self.assertIs(db1, fake_db)
-            self.assertEqual(fake_db.added_paths, [str(self.real_dbc)])
+def test_empty_paths():
+    """Empty DBC paths should raise ValueError."""
+    with pytest.raises(ValueError) as excinfo:
+        canmlio.load_dbc_files([])
+    assert "At least one DBC file must be provided" in str(excinfo.value)
 
-            # Multi-file load
-            second = Path(self.tempdir.name) / 'two.dbc'
-            second.write_text('x')
-            fake_db.added_paths.clear()
-            db2 = load_dbc_files([str(self.real_dbc), str(second)], prefix_signals=False)
-            self.assertIs(db2, fake_db)
-            self.assertEqual(fake_db.added_paths, [str(self.real_dbc), str(second)])
+def test_parse_error_wrapped(tmp_path, monkeypatch):
+    """ParseError in add_dbc_file should raise ValueError with parse message."""
+    p = tmp_path / "bad.dbc"
+    p.write_text("")
+    def bad_add(self, path):
+        raise db_errors.ParseError("bad format")
+    monkeypatch.setattr(FakeDB, 'add_dbc_file', bad_add)
+    with pytest.raises(ValueError) as excinfo:
+        canmlio.load_dbc_files(str(p))
+    assert f"Failed to parse DBC file {p}" in str(excinfo.value)
 
-    def test_prefix_signals_true_renames_all(self):
-        """
-        With prefix_signals=True, each signal name should be
-        '<MessageName>_<OriginalSignalName>'.
+def test_other_exception_wrapped(tmp_path, monkeypatch):
+    """Generic errors in add_dbc_file should wrap in ValueError invalid message."""
+    p = tmp_path / "bad2.dbc"
+    p.write_text("")
+    def bad_add(self, path):
+        raise RuntimeError("oops")
+    monkeypatch.setattr(FakeDB, 'add_dbc_file', bad_add)
+    with pytest.raises(ValueError) as excinfo:
+        canmlio.load_dbc_files(str(p))
+    assert f"Invalid DBC file {p}" in str(excinfo.value)
 
-        Uses 12 dummy messages and 3 signals each to ensure full coverage.
-        """
-        names = [f'MSG{i}' for i in range(1, 13)]
-        signals = ['A', 'B', 'C']
-        dummy_msgs = create_dummy_messages(names, signals)
-        fake_db = FakeDatabase(dummy_messages=dummy_msgs)
+def test_duplicate_signals_without_prefix(tmp_path, monkeypatch):
+    """Duplicate signal names without prefix_signals should raise ValueError."""
+    p = tmp_path / "d.dbc"
+    p.write_text("VERSION\n")
+    class Msg:
+        def __init__(self, name):
+            self.name = name
+            self.signals = [type('Sig', (), {'name': 'SIG'})]
+    fake = FakeDB()
+    fake.messages = [Msg('M1'), Msg('M2')]
+    monkeypatch.setattr(canmlio, 'CantoolsDatabase', lambda: fake)
+    with pytest.raises(ValueError) as excinfo:
+        canmlio.load_dbc_files(str(p), prefix_signals=False)
+    assert "Duplicate signal names found across messages" in str(excinfo.value)
 
-        with patch('canml.canmlio.Database', return_value=fake_db):
-            db = load_dbc_files(str(self.real_dbc), prefix_signals=True)
-        self.assertIs(db, fake_db)
-
-        for msg in dummy_msgs:
-            for orig, sig in zip(signals, msg.signals):
-                expected = f'{msg.name}_{orig}'
-                self.assertEqual(
-                    sig.name, expected,
-                    f"Signal rename mismatch: expected {expected}, got {sig.name}"
-                )
-
-    def test_prefix_signals_false_keeps_original(self):
-        """
-        With prefix_signals=False, signal names remain unmodified.
-        """
-        names = ['Only']
-        signals = ['X', 'Y', 'Z']
-        dummy_msgs = create_dummy_messages(names, signals)
-        fake_db = FakeDatabase(dummy_messages=dummy_msgs)
-
-        with patch('canml.canmlio.Database', return_value=fake_db):
-            db = load_dbc_files(str(self.real_dbc), prefix_signals=False)
-        self.assertIs(db, fake_db)
-
-        for orig, sig in zip(signals, dummy_msgs[0].signals):
-            self.assertEqual(
-                sig.name, orig,
-                f"Unexpected rename: signal {orig} became {sig.name}"
-            )
+def test_duplicate_message_names_with_prefix(tmp_path):
+    """Duplicate message names with prefix_signals=True should raise ValueError."""
+    p = tmp_path / "d.dbc"
+    p.write_text("VERSION\n")
+    class Msg:
+        def __init__(self, name):
+            self.name = name
+            self.signals = []
+    fake = FakeDB()
+    fake.messages = [Msg('X'), Msg('X')]
+    # bypass default DB creation
+    canmlio.CantoolsDatabase = lambda: fake
+    with pytest.raises(ValueError) as excinfo:
+        canmlio.load_dbc_files(str(p), prefix_signals=True)
+    assert "Duplicate message names found; cannot prefix uniquely" in str(excinfo.value)
 
 
-if __name__ == '__main__':
-    unittest.main()
+def test_prefix_signals_renames(tmp_path):
+    """prefix_signals=True should rename signals to Message_Signal."""
+    p = tmp_path / "d.dbc"
+    p.write_text("VERSION\n")
+    class Sig:
+        def __init__(self, name): self.name = name
+    class Msg:
+        def __init__(self, name):
+            self.name = name
+            self.signals = [Sig('A'), Sig('B')]
+    fake = FakeDB()
+    fake.messages = [Msg('M')]
+    canmlio.CantoolsDatabase = lambda: fake
+    db = canmlio.load_dbc_files(str(p), prefix_signals=True)
+    sigs = [s.name for s in db.messages[0].signals]
+    assert sigs == ['M_A', 'M_B']
