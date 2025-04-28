@@ -26,3 +26,7 @@ exclude_patterns = []
 # use the Read-the-Docs theme locally
 html_theme = "sphinx_rtd_theme"
 html_static_path = ["_static"]
+
+# conf.py
+html_logo = "_static/canml-icon.svg"
+html_favicon = "_static/canml-icon.svg"  # optional: browser tab icon

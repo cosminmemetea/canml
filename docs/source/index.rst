@@ -5,7 +5,11 @@
 
 Welcome to canml’s documentation!
 =================================
-
+.. image:: _static/canml-icon.svg
+   :alt: canml icon
+   :align: right
+   :height: 2em
+   
 canml is a toolkit for streamlined in-memory and on-disk processing of CAN bus logs in BLF format, leveraging pandas and cantools.
 
 Features at a glance
