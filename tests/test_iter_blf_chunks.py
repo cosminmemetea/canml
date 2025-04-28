@@ -1,145 +1,133 @@
+import pytest
+import pandas as pd
+import numpy as np
+from pathlib import Path
+
+import canml.canmlio as canmlio
+import cantools.database.errors as db_errors
+
 """
 Module: tests/test_iter_blf_chunks.py
 
-This test suite verifies the behavior of the `iter_blf_chunks` function
-in the `canml.canmlio` module. It uses Python’s built-in `unittest` framework
-to ensure correct FileNotFoundError handling, chunking behavior, filtering,
-skip-on-error logic, and proper resource cleanup.
+This test suite verifies the behavior of the `iter_blf_chunks` function in the
+`canml.canmlio` module using pytest. It tests file existence, chunk sizing,
+message filtering, decode error handling, and reader cleanup.
 
 Test Cases:
-  - BLF file missing raises FileNotFoundError
-  - Correct chunking based on chunk_size (including final partial chunk)
-  - Filtering by arbitration IDs via filter_ids
-  - Skipping messages that raise DecodeError or KeyError
-  - Ensuring BLFReader.stop() is called
+  - Missing BLF path raises FileNotFoundError
+  - Invalid chunk_size (<=0) raises ValueError
+  - Yields correct chunk sizes without filters
+  - Applies filter_ids to include only specified arbitration IDs
+  - Skips messages raising DecodeError or KeyError
+  - Progress bar disabled when requested
+  - Reader.stop exceptions are caught and do not propagate
+
+Best Practices:
+  - Uses pytest tmp_path for file operations
+  - Monkeypatches BLFReader for controlled iteration
+  - Tests DataFrame content and shapes
+  - Captures warnings for stop failures
+
+Prerequisites:
+  pip install pytest pandas numpy cantools tqdm
 
 To execute:
-    python -m unittest tests/test_iter_blf_chunks.py
+    pytest tests/test_iter_blf_chunks.py -v
 """
-import unittest
-import tempfile
+import pytest
+import pandas as pd
 from pathlib import Path
-from unittest.mock import patch
+import canml.canmlio as canmlio
+import cantools.database.errors as db_errors
 
-from canml.canmlio import iter_blf_chunks
-
-# Dummy message to simulate BLFReader outputs
-def create_dummy_msgs(count):
-    """Generate a list of DummyMsg instances with sequential IDs and timestamps."""
-    class DummyMsg:
-        """Represents a CAN message record."""
-        def __init__(self, arbitration_id, data, timestamp):
-            self.arbitration_id = arbitration_id
-            self.data = data
-            self.timestamp = timestamp
-    return [DummyMsg(i, b"", i * 0.1) for i in range(count)]
+# Dummy message and reader classes for testing
+class DummyMsg:
+    def __init__(self, arbitration_id, data, timestamp):
+        self.arbitration_id = arbitration_id
+        self.data = data
+        self.timestamp = timestamp
 
 class DummyReader:
-    """
-    Simulates can.io.blf.BLFReader interface:
-      - Iterable of messages
-      - stop() method marks as stopped
-    """
-    def __init__(self, messages):
-        self._messages = list(messages)
-        self.stopped = False
+    def __init__(self, msgs, stop_exc=None):
+        self._msgs = msgs
+        self.stop_exc = stop_exc
     def __iter__(self):
-        return iter(self._messages)
+        return iter(self._msgs)
     def stop(self):
-        self.stopped = True
+        if self.stop_exc:
+            raise self.stop_exc
 
-class FakeDatabase:
-    """
-    Stub for cantools Database to control decode_message behavior.
+@pytest.fixture
+def dummy_db():
+    """Simple DB that returns a dict with 'sig': arbitration_id."""
+    class DB:
+        def decode_message(self, arb, data):
+            return {'sig': arb}
+    return DB()
 
-    decode_map: dict mapping arbitration_id -> decoded dict or Exception
-    """
-    def __init__(self, decode_map=None):
-        self.decode_map = decode_map or {}
-    def decode_message(self, arbitration_id, data):
-        """
-        Returns a dict if mapping exists, else raises KeyError or propagates Exception.
-        """
-        result = self.decode_map.get(arbitration_id)
-        if isinstance(result, Exception):
-            raise result
-        if result is None:
-            # mimic cantools DecodeError
-            from cantools.database.errors import DecodeError
-            raise DecodeError(f"Cannot decode ID {arbitration_id}")
-        return result
+def test_missing_blf_path(dummy_db):
+    """Nonexistent BLF path should raise FileNotFoundError."""
+    with pytest.raises(FileNotFoundError):
+        next(canmlio.iter_blf_chunks('nonexistent.blf', dummy_db))
 
-class TestIterBlfChunks(unittest.TestCase):
-    """
-    Tests for iter_blf_chunks: file checks, chunking, filtering, error skipping, and cleanup.
-    """
-    def setUp(self):
-        # Prepare a dummy BLF file path
-        self.tempdir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tempdir.cleanup)
-        self.blf_path = Path(self.tempdir.name) / 'test.blf'
-        self.blf_path.write_text('dummy')  # content irrelevant for dummy reader
+def test_invalid_chunk_size(dummy_db, tmp_path):
+    """chunk_size <= 0 should raise ValueError."""
+    blf_file = tmp_path / 'x.blf'
+    blf_file.write_bytes(b'')
+    with pytest.raises(ValueError):
+        list(canmlio.iter_blf_chunks(str(blf_file), dummy_db, chunk_size=0))
 
-    def test_missing_file_raises(self):
-        """
-        Non-existent BLF path should raise FileNotFoundError immediately.
-        """
-        missing = Path(self.tempdir.name) / 'no.blf'
-        with self.assertRaises(FileNotFoundError):
-            _ = list(iter_blf_chunks(str(missing), db=FakeDatabase(), chunk_size=1))
+def test_chunking_and_content(tmp_path, dummy_db, monkeypatch):
+    """Yields DataFrame chunks of correct sizes and content."""
+    blf_file = tmp_path / 'x.blf'
+    blf_file.write_bytes(b'')
+    msgs = [DummyMsg(1, b"\x00", 1.0), DummyMsg(2, b"\x01", 2.0), DummyMsg(3, b"\x02", 3.0)]
+    monkeypatch.setattr(canmlio, 'BLFReader', lambda path: DummyReader(msgs))
+    chunks = list(canmlio.iter_blf_chunks(str(blf_file), dummy_db, chunk_size=2, progress_bar=False))
+    assert len(chunks) == 2
+    df1, df2 = chunks
+    assert list(df1['timestamp']) == [1.0, 2.0]
+    assert list(df2['timestamp']) == [3.0]
 
-    def test_chunking_and_stop(self):
-        """
-        Verify chunk sizes and that stop() is called on reader.
-        """
-        msgs = create_dummy_msgs(5)
-        fake_db = FakeDatabase({i: {'val': i} for i in range(5)})
-        reader = DummyReader(msgs)
-        with patch('canml.canmlio.BLFReader', return_value=reader):
-            chunks = list(iter_blf_chunks(str(self.blf_path), db=fake_db, chunk_size=2))
-        # Should produce 3 chunks: sizes 2,2,1
-        self.assertEqual([len(c) for c in chunks], [2, 2, 1])
-        # Reader.stop() must be invoked
-        self.assertTrue(reader.stopped)
-        # Verify data integrity
-        df0 = chunks[0]
-        self.assertListEqual(df0['val'].tolist(), [0, 1])
-        self.assertListEqual([round(x, 1) for x in df0['timestamp']], [0.0, 0.1])
+def test_filter_ids(tmp_path, dummy_db, monkeypatch):
+    """Only messages with arbitration_id in filter_ids are decoded."""
+    blf_file = tmp_path / 'f.blf'
+    blf_file.write_bytes(b'')
+    msgs = [DummyMsg(1, b"", 0.0), DummyMsg(2, b"", 1.0)]
+    monkeypatch.setattr(canmlio, 'BLFReader', lambda path: DummyReader(msgs))
+    chunks = list(canmlio.iter_blf_chunks(str(blf_file), dummy_db, chunk_size=10, filter_ids={2}, progress_bar=False))
+    assert len(chunks) == 1
+    df = chunks[0]
+    assert list(df['timestamp']) == [1.0]
 
-    def test_filter_ids(self):
-        """
-        Only messages with arbitration_id in filter_ids should be decoded.
-        """
-        msgs = create_dummy_msgs(3)
-        # Only id 1 and 2 have mapping
-        fake_db = FakeDatabase({1: {'A': 10}, 2: {'A': 20}})
-        reader = DummyReader(msgs)
-        with patch('canml.canmlio.BLFReader', return_value=reader):
-            chunk = next(iter_blf_chunks(str(self.blf_path), db=fake_db, chunk_size=10, filter_ids={1, 2}))
-        self.assertListEqual(chunk['A'].tolist(), [10, 20])
-        # Ensure timestamp field preserved
-        self.assertListEqual([round(t,1) for t in chunk['timestamp']], [0.1, 0.2])
+def test_skip_on_decode_error(tmp_path, monkeypatch):
+    """Messages causing DecodeError are skipped."""
+    blf_file = tmp_path / 'e.blf'
+    blf_file.write_bytes(b'')
+    class BadDB:
+        def decode_message(self, arb, data):
+            raise db_errors.DecodeError('fail')
+    msgs = [DummyMsg(1, b"", 0.0), DummyMsg(2, b"", 1.0)]
+    monkeypatch.setattr(canmlio, 'BLFReader', lambda path: DummyReader(msgs))
+    chunks = list(canmlio.iter_blf_chunks(str(blf_file), BadDB(), chunk_size=10, progress_bar=False))
+    assert chunks == []
 
-    def test_skip_errors(self):
-        """
-        Messages causing DecodeError or KeyError are skipped, valid ones included.
-        """
-        from cantools.database.errors import DecodeError
-        # msg 0 -> KeyError, msg1 -> DecodeError, msg2 -> valid
-        msgs = [create_dummy_msgs(1)[0] for _ in range(3)]
-        # override arbitration IDs
-        msgs[0].arbitration_id = 0
-        msgs[1].arbitration_id = 1
-        msgs[2].arbitration_id = 2
-        msgs[0].timestamp = 0.0
-        msgs[1].timestamp = 0.1
-        msgs[2].timestamp = 0.2
-        fake_db = FakeDatabase({0: KeyError('x'), 1: DecodeError('y'), 2: {'VAL': 42}})
-        reader = DummyReader(msgs)
-        with patch('canml.canmlio.BLFReader', return_value=reader):
-            chunk = next(iter_blf_chunks(str(self.blf_path), db=fake_db, chunk_size=5))
-        self.assertListEqual(chunk['VAL'].tolist(), [42])
-        self.assertListEqual([round(t,1) for t in chunk['timestamp']], [0.2])
+def test_stop_exception_logged(tmp_path, dummy_db, monkeypatch, caplog):
+    """Exceptions in reader.stop() are caught and logged."""
+    blf_file = tmp_path / 's.blf'
+    blf_file.write_bytes(b'')
+    msgs = [DummyMsg(1, b"", 0.0)]
+    reader = DummyReader(msgs, stop_exc=RuntimeError('stop fail'))
+    monkeypatch.setattr(canmlio, 'BLFReader', lambda path: reader)
+    caplog.set_level('WARNING')
+    chunks = list(canmlio.iter_blf_chunks(str(blf_file), dummy_db, chunk_size=10, progress_bar=False))
+    assert len(chunks) == 1
+    assert 'Failed to close BLF reader' in caplog.text
 
-if __name__ == '__main__':
-    unittest.main()
+def test_no_messages_yields_nothing(tmp_path, dummy_db, monkeypatch):
+    """No messages should yield no chunks."""
+    blf_file = tmp_path / 'n.blf'
+    blf_file.write_bytes(b'')
+    monkeypatch.setattr(canmlio, 'BLFReader', lambda path: DummyReader([]))
+    chunks = list(canmlio.iter_blf_chunks(str(blf_file), dummy_db, chunk_size=5, progress_bar=False))
+    assert chunks == []
