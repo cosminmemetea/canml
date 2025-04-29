@@ -1,6 +1,6 @@
 [project]
 name = "canml"
-version = "0.1.6"
+version = "0.1.7"
 description = "Decode CAN BLF logs using DBC files into pandas DataFrames and export to CSV"
 readme = { file = "README.MD", content-type = "text/markdown" }
 authors = [

@@ -7,7 +7,7 @@
 
 # canml 
 
-**canml** is a Python toolkit for production‐scale decoding of CAN bus logs (BLF) using CAN.DBC definitions. It streams large BLF files into pandas DataFrames—either in chunks or all at once—and offers robust CSV and Parquet export, signal‐level filtering, DBC merging, and progress reporting.
+**canml** is a Python toolkit for decoding of CAN bus logs (BLF) using CAN.DBC definitions. It streams large BLF files into pandas DataFrames—either in chunks or all at once—and offers robust CSV and Parquet export, signal‐level filtering, DBC merging, and progress reporting.
 
 ---
 
