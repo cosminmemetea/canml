@@ -157,94 +157,129 @@ def iter_blf_chunks(
         except (NameError, Exception) as e:
             glogger.warning(f"Failed to close BLF reader: {e}", exc_info=True)
 
-
 def load_blf(
     blf_path: str,
     db: Union[CantoolsDatabase, str, List[str]],
     message_ids: Optional[Set[int]] = None,
-    expected_signals: Optional[List[str]] = None,
+    expected_signals: Optional[Iterable[str]] = None,
     force_uniform_timing: bool = False,
     interval_seconds: float = 0.01,
     dtype_map: Optional[Dict[str, Union[str, np.dtype]]] = None,
-    sort_timestamps: bool = False
+    sort_timestamps: bool = False,
+    chunk_size: int = 10000,
 ) -> pd.DataFrame:
     """
     Load an entire BLF file into a DataFrame, with optional filters, signal injection,
     and dtype control for injected signals.
 
-    Notes:
-      - If force_uniform_timing=True, the original timestamps are saved in "raw_timestamp".
-      - Concatenates chunks iteratively to reduce memory usage.
-
     Args:
-        blf_path: Path to the BLF log.
-        db: Database instance or DBC path(s).
-        message_ids: Set of arbitration IDs to include (default all).
-        expected_signals: List of signal names to ensure exist.
-        force_uniform_timing: If True, override timestamps with uniform spacing.
-        interval_seconds: Interval for uniform timing.
-        dtype_map: Optional mapping from signal name to dtype for injected columns.
-        sort_timestamps: If True, sort by timestamp before processing.
-
+        blf_path:            Path to the BLF log.
+        db:                  A CantoolsDatabase instance or path(s) to DBC file(s).
+        message_ids:         Set of arbitration IDs to include (default all).
+        expected_signals:    Any iterable of signal names to ensure exist.
+        force_uniform_timing:Override timestamps with uniform spacing (interval_seconds).
+        interval_seconds:    Spacing (s) used when force_uniform_timing=True.
+        dtype_map:           Mapping from expected signal name to desired dtype.
+        sort_timestamps:     If True, sort final DataFrame by timestamp.
+        chunk_size:          Number of rows per intermediate chunk load.
     Returns:
-        A DataFrame with 'timestamp' + decoded signal columns.
-
+        DataFrame with 'timestamp' plus decoded signal columns.
     Raises:
-        FileNotFoundError: If files missing.
-        ValueError: For invalid parameters or processing errors.
+        FileNotFoundError:   If BLF or DBC files are missing.
+        ValueError:          For invalid parameters or processing errors.
     """
+    # Normalize and validate expected_signals
+    if expected_signals is not None:
+        try:
+            expected_signals = list(expected_signals)
+        except TypeError:
+            raise ValueError("expected_signals must be an iterable of strings")
+        if any(not isinstance(s, str) for s in expected_signals):
+            raise ValueError("All expected_signals must be strings")
+        if len(expected_signals) != len(set(expected_signals)):
+            raise ValueError("Duplicate names found in expected_signals")
+    else:
+        expected_signals = []
+
+    # Validate dtype_map
+    dtype_map = dtype_map or {}
+    extra_signals = set(dtype_map) - set(expected_signals)
+    if extra_signals:
+        raise ValueError(f"dtype_map contains unknown signals: {extra_signals}")
+    for sig, dt in dtype_map.items():
+        try:
+            pd.Series(dtype=dt)
+        except Exception:
+            raise ValueError(f"Invalid dtype for signal {sig}: {dt}")
+
+    # Validate uniform timing params
     if force_uniform_timing and interval_seconds <= 0:
         raise ValueError("interval_seconds must be positive")
-    if message_ids is not None and not message_ids:
-        glogger.warning("Empty message_ids provided; no messages will be decoded")
-    if expected_signals and len(expected_signals) != len(set(expected_signals)):
-        raise ValueError("Duplicate names found in expected_signals")
-    if dtype_map:
-        for sig, dt in dtype_map.items():
-            try:
-                pd.Series(dtype=dt)
-            except Exception as e:
-                raise ValueError(f"Invalid dtype for signal {sig}: {dt}") from e
 
+    # Load or merge DBC(s)
     database = db if isinstance(db, CantoolsDatabase) else load_dbc_files(db)
-    df = None
+
+    # Stream and collect chunks
+    chunks: List[pd.DataFrame] = []
     try:
-        for chunk in iter_blf_chunks(blf_path, database, chunk_size=10000, filter_ids=message_ids):
-            if df is None:
-                df = chunk
-            else:
-                df = pd.concat([df, chunk], ignore_index=True)
+        for chunk in iter_blf_chunks(
+            blf_path,
+            database,
+            chunk_size=chunk_size,
+            filter_ids=message_ids,
+            progress_bar=False,
+        ):
+            chunks.append(chunk)
     except Exception as e:
         glogger.error("Failed to process BLF chunks", exc_info=True)
         raise ValueError(f"Failed to process BLF data: {e}") from e
 
-    if df is None or df.empty:
-        cols = ["timestamp"] + (expected_signals or [])
-        df = pd.DataFrame(columns=cols)
-        df["timestamp"] = pd.Series(dtype=float)
+    # Concatenate all chunks (or create empty DataFrame if none)
+    if not chunks:
+        # Build empty, dtype‐aware DataFrame
+        data = {
+            "timestamp": pd.Series(dtype=float),
+            **{
+                sig: pd.Series(dtype=dtype_map.get(sig, float))
+                for sig in expected_signals
+            }
+        }
+        df = pd.DataFrame(data)
         glogger.warning(f"No data decoded from {blf_path}; returning empty DataFrame")
+    else:
+        df = pd.concat(chunks, ignore_index=True)
 
-    if sort_timestamps and not df.empty and "timestamp" in df.columns:
+    # Optional sorting
+    if sort_timestamps and not df.empty:
         df = df.sort_values("timestamp").reset_index(drop=True)
 
+    # Optional uniform timing (preserving raw_timestamp)
     if force_uniform_timing and not df.empty:
         df["raw_timestamp"] = df["timestamp"]
-        df["timestamp"] = pd.Series(range(len(df))) * interval_seconds
+        uniform_idx = pd.Series(np.arange(len(df)) * interval_seconds, index=df.index)
+        df["timestamp"] = uniform_idx
 
-    dtype_map = dtype_map or {}
-    if expected_signals:
-        for sig in expected_signals:
-            if sig not in df.columns:
-                dt = dtype_map.get(sig, float)
-                glogger.warning(f"Expected signal '{sig}' not found; filling with NaN as {dt}")
-                df[sig] = pd.Series(dtype=dt)
+    # Inject missing expected_signals with correct dtype
+    for sig in expected_signals:
+        if sig not in df.columns:
+            dt = dtype_map.get(sig, float)
+            npdtype = np.dtype(dt)
+            glogger.warning(
+                f"Expected signal '{sig}' not found; filling with default values of dtype {npdtype}"
+            )
+            if np.issubdtype(npdtype, np.integer):
+                # integer types: fill with zeros so dtype stays integer
+                df[sig] = np.zeros(len(df), dtype=npdtype)
+            else:
+                # floats or others: fill with NaN
+                df[sig] = pd.Series([np.nan] * len(df), dtype=npdtype)
 
+    # Reorder so that 'timestamp' is first
     if "timestamp" in df.columns:
         cols = ["timestamp"] + [c for c in df.columns if c != "timestamp"]
         df = df[cols]
 
     return df
-
 
 def to_csv(
     df_or_iter: Union[pd.DataFrame, Iterable[pd.DataFrame]],

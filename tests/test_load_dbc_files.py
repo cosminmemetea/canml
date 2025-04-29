@@ -1,9 +1,3 @@
-import pytest
-import pytest
-import cantools.database.errors as db_errors
-
-import canml.canmlio as canmlio
-
 """
 Module: tests/test_load_dbc_files.py
 
@@ -33,6 +27,11 @@ Prerequisites:
 To execute:
     pytest tests/test_load_dbc_files.py -v
 """
+import pytest
+import pytest
+import cantools.database.errors as db_errors
+
+import canml.canmlio as canmlio
 
 class FakeDB:
     """Fake CantoolsDatabase substitute recording DBC additions and holding messages."""
