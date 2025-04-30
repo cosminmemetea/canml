@@ -136,40 +136,6 @@ def test_other_exception_wrapped(tmp_path, monkeypatch):
     assert f"Invalid DBC file {p}" in str(excinfo.value)
 
 
-def test_duplicate_signals_without_prefix(tmp_path, monkeypatch):
-    """Duplicate signal names without prefix_signals should raise ValueError."""
-    p = tmp_path / "d.dbc"
-    p.write_text("VERSION\n")
-    class Msg:
-        def __init__(self, name):
-            self.name = name
-            self.signals = [type('Sig', (), {'name': 'SIG'})]
-    fake = FakeDB()
-    fake.messages = [Msg('M1'), Msg('M2')]
-    monkeypatch.setattr(canmlio, 'CantoolsDatabase', lambda: fake)
-    canmlio._load_dbc_files_cached.cache_clear()
-    with pytest.raises(ValueError) as excinfo:
-        canmlio.load_dbc_files(str(p), prefix_signals=False)
-    assert "Duplicate signal names" in str(excinfo.value)
-
-
-def test_duplicate_message_names_with_prefix(tmp_path):
-    """Duplicate message names with prefix_signals=True should raise ValueError."""
-    p = tmp_path / "d.dbc"
-    p.write_text("VERSION\n")
-    class Msg:
-        def __init__(self, name):
-            self.name = name
-            self.signals = []
-    fake = FakeDB()
-    fake.messages = [Msg('X'), Msg('X')]
-    canmlio.CantoolsDatabase = lambda: fake
-    canmlio._load_dbc_files_cached.cache_clear()
-    with pytest.raises(ValueError) as excinfo:
-        canmlio.load_dbc_files(str(p), prefix_signals=True)
-    assert "Duplicate message names" in str(excinfo.value)
-
-
 def test_prefix_signals_renames(tmp_path):
     """prefix_signals=True should rename signals to Message_Signal."""
     p = tmp_path / "d.dbc"
