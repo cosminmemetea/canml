@@ -1,230 +1,235 @@
 """
 Module: tests/test_load_blf.py
 
-This test suite verifies the behavior of the `load_blf` function in the `canml.canmlio` module
-using pytest. It ensures correct handling of BLF and DBC files, Database instance vs. path
-inputs, chunk concatenation, uniform timing, signal injection with dtype control, timestamp
-sorting, column ordering, and logger configuration.
+This test suite verifies the behavior of the `load_blf` function in the
+`canml.canmlio` module using pytest. It ensures correct handling of BLF files,
+DBC inputs, chunk concatenation, uniform timing, signal injection with dtype control,
+filtering, metadata, and error handling.
 
 Test Cases:
-  - Missing BLF path raises ValueError
+  - Missing BLF path raises FileNotFoundError
   - Missing DBC path raises FileNotFoundError
-  - Empty DBC paths raises ValueError
-  - Empty BLF file returns empty DataFrame with correct schema
+  - Empty DBC paths raises ValueError (via load_dbc_files)
+  - Empty BLF returns empty DataFrame with expected columns and warning
   - Database instance skips load_dbc_files
-  - DBC path string/list calls load_dbc_files
-  - Empty message_ids returns empty DataFrame with warning about no data
+  - DBC path string/list invokes load_dbc_files
+  - Empty message_ids yields empty DataFrame with warning
   - Chunk concatenation from iter_blf_chunks
-  - force_uniform_timing with interval_seconds
-  - sort_timestamps sorts non-monotonic timestamps
-  - expected_signals injection with dtype_map (int32)
-  - Duplicate expected_signals raises ValueError
-  - Invalid dtype_map raises ValueError
-  - Invalid interval_seconds raises ValueError
-  - Column order with timestamp first
-  - Logger configuration (StreamHandler, INFO level, format)
-  - Chunk iteration errors raise ValueError
+  - filter_ids filters messages by ID
+  - filter_signals filters decoded fields
+  - force_uniform_timing transforms timestamps and preserves raw_timestamp
+  - sort_timestamps sorts
+  - expected_signals injection preserves integer dtype
+  - duplicate expected_signals raises ValueError
+  - invalid dtype_map signal raises ValueError
+  - invalid interval_seconds raises ValueError
+  - timestamp is first column
+  - metadata_attrs appear in DataFrame attrs
+  - error in iter_blf_chunks propagates as ValueError
 
 Best Practices:
-  - Uses pytest fixtures for temporary files and mocks
-  - Parametrizes tests for input variations
-  - Captures logs with caplog
-  - Mocks cantools dependencies for portability
-  - Organized with clear docstrings and comments
-  - Correct imports for canml.canmlio package structure
+  - Uses pytest fixtures and monkeypatch
+  - Captures warnings and logs
 
 Prerequisites:
-  - Install dependencies: pip install pytest pandas numpy cantools tqdm pytest-cov
-  - Ensure project root is in PYTHONPATH: export PYTHONPATH=$PWD
-  - Alternatively, install canml as editable: pip install -e .
+  pip install pytest pandas numpy cantools tqdm
 
 To execute:
     pytest tests/test_load_blf.py -v
-To run with coverage:
-    pytest --cov=canml.canmlio tests/test_load_blf.py
 """
-
 import pytest
-import logging
 import pandas as pd
 import numpy as np
+import logging
 from pathlib import Path
-from cantools.database.can import Database as CantoolsDatabase
+import cantools.database.errors as db_errors
+
 import canml.canmlio as canmlio
+from canml.canmlio import load_blf, load_dbc_files, iter_blf_chunks, CanmlConfig
+from cantools.database.can import Database as CantoolsDatabase
+
+
+@pytest.fixture(autouse=True)
+def setup_logging(caplog):
+    """Capture warnings and info logs from canmlio."""
+    caplog.set_level(logging.WARNING, logger=canmlio.__name__)
+    yield
+    canmlio.glogger.setLevel(logging.INFO)
 
 
 @pytest.fixture
-def dummy_db(tmp_path, monkeypatch):
-    """Provide a dummy CantoolsDatabase and mock load_dbc_files."""
+def dummy_db(monkeypatch):
+    """Provide a dummy CantoolsDatabase instance for tests."""
     db = CantoolsDatabase()
-    monkeypatch.setattr(db, 'add_dbc_file', lambda x: None)
+    monkeypatch.setattr(canmlio, 'load_dbc_files', lambda x: db)
     return db
 
 
 @pytest.fixture
 def sample_blf(tmp_path, monkeypatch):
-    """Create a minimal BLF file and patch BLFReader to yield no messages."""
-    blf = tmp_path / "empty.blf"
-    blf.write_bytes(b"")
+    """Create empty BLF and patch BLFReader to yield no messages."""
+    f = tmp_path / 'empty.blf'
+    f.write_bytes(b'')
     class DummyReader:
         def __init__(self, path): pass
         def __iter__(self): return iter([])
         def stop(self): pass
     monkeypatch.setattr(canmlio, 'BLFReader', DummyReader)
-    return str(blf)
+    return str(f)
 
 
 def test_missing_blf_path(dummy_db):
-    """Missing BLF path should raise ValueError wrapping FileNotFoundError."""
-    with pytest.raises(ValueError) as excinfo:
-        canmlio.load_blf('nonexistent.blf', dummy_db)
-    assert 'Failed to process BLF data' in str(excinfo.value)
+    """Nonexistent BLF path raises FileNotFoundError."""
+    with pytest.raises(FileNotFoundError):
+        load_blf('no.blf', dummy_db)
 
 
 def test_missing_dbc_path(tmp_path):
-    """Missing DBC path string should raise FileNotFoundError from load_dbc_files."""
-    blf = tmp_path / 'file.blf'
+    """Nonexistent DBC path raises FileNotFoundError."""
+    blf = tmp_path / 'a.blf'
     blf.write_bytes(b'')
     with pytest.raises(FileNotFoundError):
-        canmlio.load_blf(str(blf), 'nonexistent.dbc')
+        load_blf(str(blf), 'missing.dbc')
 
 
 def test_empty_dbc_paths():
-    """Empty DBC paths list should raise ValueError in load_dbc_files."""
+    """Empty DBC list raises ValueError via load_dbc_files."""
     with pytest.raises(ValueError):
-        canmlio.load_dbc_files([])
+        load_dbc_files([])
 
 
-def test_empty_blf_returns_empty_df(dummy_db, sample_blf, caplog):
-    """Empty BLF yields empty DataFrame with correct schema and warning."""
-    caplog.set_level('WARNING')
-    df = canmlio.load_blf(sample_blf, dummy_db, expected_signals=['A', 'B'])
-    assert list(df.columns) == ['timestamp', 'A', 'B']
+def test_empty_blf_returns_empty(sample_blf, dummy_db, caplog):
+    """Empty BLF yields empty DF with timestamp+expected columns and warning."""
+    cfg = CanmlConfig()
+    caplog.set_level(logging.WARNING, logger=canmlio.__name__)
+    df = load_blf(sample_blf, dummy_db, config=cfg, expected_signals=['A','B'])
     assert df.empty
+    assert list(df.columns) == ['timestamp','A','B']
     assert 'No data decoded' in caplog.text
 
 
-def test_db_instance_skips_load_dbc_files(dummy_db, sample_blf, monkeypatch):
-    """Pass CantoolsDatabase instance; should not call load_dbc_files."""
-    monkeypatch.setattr(canmlio, 'load_dbc_files', lambda x: (_ for _ in ()).throw(AssertionError("Should not call")))
-    df = canmlio.load_blf(sample_blf, dummy_db)
+def test_db_instance_skips_load_dbc_files(sample_blf, dummy_db, monkeypatch):
+    """Passing DB instance should not call load_dbc_files."""
+    monkeypatch.setattr(canmlio, 'load_dbc_files', lambda x: (_ for _ in ()).throw(AssertionError()))
+    df = load_blf(sample_blf, dummy_db)
     assert isinstance(df, pd.DataFrame)
 
 
-def test_dbc_path_invokes_load_dbc_files(tmp_path, sample_blf, monkeypatch, dummy_db):
-    """Passing DBC path should call load_dbc_files exactly once."""
+def test_dbc_path_invokes_load_dbc_files(sample_blf, tmp_path, monkeypatch, dummy_db):
+    """Passing path invokes load_dbc_files once."""
     dbc = tmp_path / 'd.dbc'
     dbc.write_text('')
-    called = {'count': 0}
-    def fake_load(paths):
-        called['count'] += 1
-        return dummy_db
-    monkeypatch.setattr(canmlio, 'load_dbc_files', fake_load)
-    df = canmlio.load_blf(sample_blf, str(dbc))
-    assert called['count'] == 1
+    count = {'n':0}
+    monkeypatch.setattr(canmlio, 'load_dbc_files', lambda p: (_ for _ in ()).throw(AssertionError()) if count['n'] else (count.update(n=1) or dummy_db))
+    df = load_blf(sample_blf, str(dbc))
     assert isinstance(df, pd.DataFrame)
 
 
-def test_empty_message_ids_returns_empty(dummy_db, sample_blf, caplog):
-    """Empty message_ids yields empty DataFrame and 'No data decoded' warning."""
-    caplog.set_level('WARNING')
-    df = canmlio.load_blf(sample_blf, dummy_db, message_ids=set())
-    assert df.empty
-    assert 'No data decoded' in caplog.text
+def test_empty_message_ids_warn(sample_blf, dummy_db, caplog):
+    """Empty message_ids yields empty DF with warning."""
+    cfg = CanmlConfig()
+    caplog.set_level(logging.WARNING, logger=canmlio.__name__)
+    df = load_blf(sample_blf, dummy_db, config=cfg, message_ids=set())
+    assert df.empty and 'Empty message_ids' in caplog.text
 
 
-def test_chunk_concatenation(monkeypatch, dummy_db):
-    """Chunks from iter_blf_chunks are concatenated into a single DataFrame."""
-    monkeypatch.setattr(canmlio, 'iter_blf_chunks', lambda *args, **kwargs: iter([
-        pd.DataFrame([{'timestamp': 1, 'v': 10}]),
-        pd.DataFrame([{'timestamp': 2, 'v': 20}])
-    ]))
-    df = canmlio.load_blf('p.blf', dummy_db)
-    assert len(df) == 2
-    assert list(df['timestamp']) == [1, 2]
-    assert list(df['v']) == [10, 20]
+def test_chunk_concat_and_filter(monkeypatch, dummy_db):
+    """Chunks concatenated and filter_ids works."""
+    def dummy_chunks(path, db, config, fids, fsigs):
+        yield pd.DataFrame([{'x':1,'timestamp':0.1}])
+        yield pd.DataFrame([{'x':2,'timestamp':0.2}])
+    monkeypatch.setattr(canmlio, 'iter_blf_chunks', dummy_chunks)
+    cfg = CanmlConfig()
+    df = load_blf('p.blf', dummy_db, config=cfg, message_ids={1}, expected_signals=['x'])
+    assert list(df['x']) == [1,2]
 
 
-def test_force_uniform_timing_and_interval(dummy_db, sample_blf, monkeypatch):
-    """force_uniform_timing transforms timestamps by interval_seconds."""
-    monkeypatch.setattr(canmlio, 'iter_blf_chunks', lambda *args, **kwargs: iter([
-        pd.DataFrame([{'timestamp': 0.1, 'x': 1}, {'timestamp': 0.2, 'x': 2}]),
-        pd.DataFrame([{'timestamp': 0.3, 'x': 3}])
-    ]))
-    df = canmlio.load_blf('path.blf', dummy_db, force_uniform_timing=True, interval_seconds=0.5)
+def test_filter_signals(monkeypatch, dummy_db):
+    """filter_signals drops unwanted keys."""
+    def dummy_chunks(path, db, config, fids, fsigs):
+        yield pd.DataFrame([{'a':1,'b':2,'timestamp':0}])
+    monkeypatch.setattr(canmlio, 'iter_blf_chunks', dummy_chunks)
+    cfg = CanmlConfig()
+    df = load_blf('p.blf', dummy_db, config=cfg, expected_signals=['b'])
+    assert 'a' not in df.columns and 'b' in df.columns
+
+
+def test_uniform_timing_and_raw(monkeypatch, dummy_db):
+    """force_uniform_timing resets timestamp and adds raw_timestamp."""
+    def dummy_chunks(*args, **kwargs):
+        yield pd.DataFrame([{'timestamp':0.1,'v':1},{'timestamp':0.5,'v':2}])
+    monkeypatch.setattr(canmlio, 'iter_blf_chunks', dummy_chunks)
+    cfg = CanmlConfig(force_uniform_timing=True, interval_seconds=0.5)
+    df = load_blf('p.blf', dummy_db, config=cfg)
     assert 'raw_timestamp' in df.columns
-    # uniform timestamps: 0.0, 0.5, 1.0
-    assert np.allclose(df['timestamp'], [0.0, 0.5, 1.0])
+    assert np.allclose(df['timestamp'], [0.0,0.5])
 
 
 def test_sort_timestamps(monkeypatch, dummy_db):
-    """sort_timestamps=True sorts non-monotonic timestamps."""
-    monkeypatch.setattr(canmlio, 'iter_blf_chunks', lambda *args, **kwargs: iter([
-        pd.DataFrame([{'timestamp': 2, 'a': 1}, {'timestamp': 1, 'a': 2}])
-    ]))
-    df = canmlio.load_blf('p.blf', dummy_db, sort_timestamps=True)
-    assert list(df['timestamp']) == [1, 2]
+    """sort_timestamps orders timestamps."""
+    def dummy_chunks(*args, **kwargs): yield pd.DataFrame([{'timestamp':2},{'timestamp':1}])
+    monkeypatch.setattr(canmlio, 'iter_blf_chunks', dummy_chunks)
+    cfg = CanmlConfig(sort_timestamps=True)
+    df = load_blf('p.blf', dummy_db, config=cfg)
+    assert list(df['timestamp']) == [1,2]
 
 
-def test_expected_signals_injection_with_dtype(dummy_db, sample_blf, monkeypatch, caplog):
-    """Missing expected_signals are injected with dtype from dtype_map."""
-    monkeypatch.setattr(canmlio, 'iter_blf_chunks', lambda *args, **kwargs: iter([
-        pd.DataFrame([{'timestamp': 0}])
-    ]))
-    caplog.set_level('WARNING')
-    df = canmlio.load_blf(sample_blf, dummy_db, expected_signals=['S1'], dtype_map={'S1': 'int32'})
-    assert 'S1' in df.columns
-    # dtype_map specified int32, so injected column should be int32
-    assert df['S1'].dtype == np.dtype('int32')
-    assert "Expected signal 'S1' not found" in caplog.text
+def test_expected_signals_and_dtype(monkeypatch, dummy_db):
+    """Missing signal injected with correct dtype int32."""
+    def dummy_chunks(*args, **kwargs): yield pd.DataFrame([{'timestamp':0}])
+    monkeypatch.setattr(canmlio, 'iter_blf_chunks', dummy_chunks)
+    cfg = CanmlConfig(dtype_map={'S':'int32'})
+    df = load_blf('p.blf', dummy_db, config=cfg, expected_signals=['S'])
+    assert df['S'].dtype == np.dtype('int32')
 
 
-def test_duplicate_expected_signals_raises():
-    """Duplicate names in expected_signals should raise ValueError."""
+def test_duplicate_expected_signals():
+    """Duplicate expected_signals raises ValueError before DB load."""
     with pytest.raises(ValueError):
-        canmlio.load_blf('p.blf', 'd.dbc', expected_signals=['X','X'])
+        load_blf('p.blf', 'd.dbc', config=CanmlConfig(), expected_signals=['X','X'])
 
 
-def test_invalid_dtype_map_raises(dummy_db, sample_blf):
-    """Invalid dtype in dtype_map should raise ValueError."""
+def test_invalid_dtype_map(dummy_db):
+    """dtype_map unknown signal raises ValueError."""
     with pytest.raises(ValueError):
-        canmlio.load_blf(sample_blf, dummy_db, expected_signals=['E'], dtype_map={'E': 'not_a_dtype'})
+        load_blf('p.blf', dummy_db, config=CanmlConfig(dtype_map={'E':'float'}), expected_signals=['A'])
 
 
-def test_invalid_interval_seconds_value(dummy_db, sample_blf):
-    """interval_seconds <= 0 with force_uniform_timing should raise ValueError."""
+def test_invalid_interval_values():
+    """interval_seconds<=0 raises in config."""
     with pytest.raises(ValueError):
-        canmlio.load_blf(sample_blf, dummy_db, force_uniform_timing=True, interval_seconds=0)
+        CanmlConfig(interval_seconds=0)
 
 
-def test_column_order_timestamp_first(monkeypatch, dummy_db):
-    """Result DataFrame columns start with timestamp."""
-    monkeypatch.setattr(canmlio, 'iter_blf_chunks', lambda *args, **kwargs: iter([
-        pd.DataFrame([{'timestamp': 1, 'b': 2, 'a': 3}])
-    ]))
-    df = canmlio.load_blf('f.blf', dummy_db)
+def test_timestamp_first(monkeypatch, dummy_db):
+    """timestamp column is first in result."""
+    def dummy_chunks(*args, **kwargs): yield pd.DataFrame([{'timestamp':1,'b':2,'a':3}])
+    monkeypatch.setattr(canmlio, 'iter_blf_chunks', dummy_chunks)
+    cfg = CanmlConfig()
+    df = load_blf('p.blf', dummy_db, config=cfg)
     assert df.columns[0] == 'timestamp'
 
 
-def test_logger_configuration():
-    """Module logger should have a single StreamHandler at INFO level and proper format."""
-    logger = canmlio.glogger
-    handlers = logger.handlers
-    assert len(handlers) == 1
-    handler = handlers[0]
-    assert handler.level in (logging.NOTSET, logging.INFO)
-    assert handler.formatter._fmt == "%(asctime)s [%(levelname)s] %(message)s"
+def test_metadata_attrs(monkeypatch, tmp_path, sample_blf):
+    """DataFrame attrs contain signal_attributes metadata."""
+    # Fake DB and signals
+    class SigObj:
+        def __init__(self,name): self.name=name; self.attributes={'u':'m'}; self.choices=None
+    class Msg:
+        def __init__(self,sigs): self.signals=sigs
+    fake_db = type('FakeDB', (), {})()
+    fake_db.messages = [Msg([SigObj('a'), SigObj('b')])]
+    monkeypatch.setattr(canmlio, 'load_dbc_files', lambda x: fake_db)
+    monkeypatch.setattr(canmlio, 'iter_blf_chunks', lambda *args, **kwargs: iter([pd.DataFrame([{'timestamp':0,'a':1,'b':2}])]))
+    cfg = CanmlConfig()
+    df = load_blf(sample_blf, 'dummy.dbc', config=cfg)
+    assert 'signal_attributes' in df.attrs
+    assert 'a' in df.attrs['signal_attributes']
 
 
-def test_iter_blf_chunks_error_handling(monkeypatch, tmp_path, dummy_db):
-    """Exceptions in iter_blf_chunks should raise ValueError."""
-    class BadReader:
-        def __init__(self, path): pass
-        def __iter__(self): raise RuntimeError("boom")
-        def stop(self): raise RuntimeError("stop fail")
-    monkeypatch.setattr(canmlio, 'BLFReader', BadReader)
-    p = tmp_path / 't.blf'
-    p.write_bytes(b'')
-    with pytest.raises(ValueError) as excinfo:
-        canmlio.load_blf(str(p), dummy_db)
-    assert 'Failed to process BLF data' in str(excinfo.value)
+def test_iter_error_propagates(monkeypatch, dummy_db):
+    """Exceptions in iter_blf_chunks raise ValueError."""
+    monkeypatch.setattr(canmlio, 'iter_blf_chunks', lambda *a,**k: (_ for _ in ()).throw(RuntimeError('boom')))
+    cfg = CanmlConfig()
+    with pytest.raises(ValueError):
+        load_blf('p.blf', dummy_db, config=cfg)

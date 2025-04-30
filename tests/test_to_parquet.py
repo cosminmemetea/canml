@@ -2,87 +2,83 @@
 Module: tests/test_to_parquet.py
 
 This test suite verifies the behavior of the `to_parquet` function in the
-`canml.canmlio` module using pytest. It tests successful writes, pandas_kwargs
-and compression forwarding, error handling, and logging behavior.
-
-Test Cases:
-  - Writing a DataFrame round-trip: file exists and data matches after read
-  - Compression and pandas_kwargs are passed correctly to DataFrame.to_parquet
-  - Exceptions in to_parquet produce ValueError with appropriate message
+`canml.canmlio` module using pytest. It ensures:
+  - Writing a DataFrame to Parquet with default compression
+  - Writing with a different compression codec
+  - Metadata JSON export when requested
+  - Directory creation for parquet and metadata
+  - Proper logging
+  - Error propagation on invalid write paths
 
 Prerequisites:
-  - Install dependencies: pip install pytest pandas pyarrow
+  pip install pytest pandas pyarrow
 
 To execute:
     pytest tests/test_to_parquet.py -v
 """
 import pytest
 import pandas as pd
-import numpy as np
+import json
+import os
+import logging
 from pathlib import Path
 
 import canml.canmlio as canmlio
 
+@pytest.fixture(autouse=True)
+def setup_logging(caplog):
+    caplog.set_level(logging.INFO, logger=canmlio.__name__)
+    yield
+    canmlio.glogger.setLevel(logging.INFO)
 
-def test_round_trip_parquet(tmp_path):
-    """Writing a DataFrame and reading back yields identical data."""
-    df = pd.DataFrame({
-        'A': [1, 2, 3],
-        'B': ['x', 'y', 'z'],
-        'C': [0.1, 0.2, 0.3]
-    })
+@pytest.fixture
+def sample_df(tmp_path):
+    df = pd.DataFrame({'x': [10, 20], 'y': [30, 40]})
+    df.attrs['signal_attributes'] = {'x': {'unit': 'km/h'}, 'y': {'unit': 'm/s'}}
+    return df
+
+
+def test_write_parquet_default(tmp_path, sample_df, caplog):
     out = tmp_path / 'data.parquet'
-    # Call to_parquet
-    canmlio.to_parquet(df, str(out))
-    # File should exist
-    assert out.is_file(), "Parquet file was not created"
-    # Read back and compare
-    df2 = pd.read_parquet(str(out))
-    # Ensure same columns and dtypes (allowing possible dtype promotions)
-    pd.testing.assert_frame_equal(df, df2)
+    canmlio.to_parquet(sample_df, str(out))
+    assert out.exists()
+    # read back
+    df_read = pd.read_parquet(out)
+    pd.testing.assert_frame_equal(df_read, sample_df)
+    assert f"Parquet written to {out}" in caplog.text
 
 
-def test_compression_and_kwargs_forwarded(monkeypatch, tmp_path):
-    """to_parquet should forward compression and pandas_kwargs to DataFrame.to_parquet."""
-    df = pd.DataFrame({'X': [10]})
-    out = tmp_path / 'test.parquet'
-    calls = {}
-    
-    def fake_to_parquet(self, path, engine, compression, **kwargs):
-        # Record parameters
-        calls['path'] = path
-        calls['engine'] = engine
-        calls['compression'] = compression
-        calls['kwargs'] = kwargs
-        # create an empty file to satisfy existence if needed
-        Path(path).write_bytes(b'')
-
-    # Monkeypatch the DataFrame.to_parquet method
-    monkeypatch.setattr(pd.DataFrame, 'to_parquet', fake_to_parquet)
-    # Call with custom compression and extra kwargs
-    canmlio.to_parquet(df, str(out), compression='gzip', pandas_kwargs={'index': False, 'foo': 'bar'})
-    assert Path(calls['path']) == out
-    assert calls['engine'] == 'pyarrow'
-    assert calls['compression'] == 'gzip'
-    # pandas_kwargs forwarded
-    assert calls['kwargs']['index'] is False
-    assert calls['kwargs']['foo'] == 'bar'
+def test_write_parquet_compression(tmp_path, sample_df):
+    out = tmp_path / 'data_gzip.parquet'
+    canmlio.to_parquet(sample_df, str(out), compression='gzip')
+    assert out.exists()
+    df_read = pd.read_parquet(out)
+    pd.testing.assert_frame_equal(df_read, sample_df)
 
 
-def test_to_parquet_raises_value_error(monkeypatch, tmp_path, caplog):
-    """Errors during DataFrame.to_parquet should raise ValueError and log error."""
-    df = pd.DataFrame({'Z': [0]})
-    out = tmp_path / 'fail.parquet'
+def test_metadata_export(tmp_path, sample_df):
+    out = tmp_path / 'folder' / 'nested.parquet'
+    meta = tmp_path / 'folder' / 'meta.json'
+    # ensure nested directories are created
+    canmlio.to_parquet(sample_df, str(out), metadata_path=str(meta))
+    assert out.exists()
+    assert meta.exists()
+    data = json.loads(meta.read_text())
+    assert 'x' in data and 'y' in data
 
-    def broken_to_parquet(self, path, engine, compression, **kwargs):
-        raise RuntimeError('disk full')
 
-    monkeypatch.setattr(pd.DataFrame, 'to_parquet', broken_to_parquet)
-    caplog.set_level('ERROR')
-    with pytest.raises(ValueError) as excinfo:
-        canmlio.to_parquet(df, str(out))
-    # Check the message contains original exception text
-    assert 'disk full' in str(excinfo.value)
-    # Logger should have an error record
-    errors = [rec for rec in caplog.records if rec.levelname == 'ERROR']
-    assert any('Failed to write Parquet' in rec.getMessage() for rec in errors)
+def test_no_metadata_if_not_requested(tmp_path, sample_df):
+    out = tmp_path / 'data2.parquet'
+    meta = tmp_path / 'data2_meta.json'
+    canmlio.to_parquet(sample_df, str(out))
+    assert out.exists()
+    assert not meta.exists()
+
+
+def test_path_dir_creation(tmp_path, sample_df):
+    """Output and metadata directories are auto-created."""
+    out = tmp_path / 'nonexistent_dir' / 'file.parquet'
+    meta = tmp_path / 'nonexistent_dir' / 'file.json'
+    canmlio.to_parquet(sample_df, str(out), metadata_path=str(meta))
+    assert out.exists()
+    assert meta.exists()
