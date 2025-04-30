@@ -36,7 +36,6 @@ To execute:
 """
 import pytest
 import logging
-from pathlib import Path
 import cantools.database.errors as db_errors
 
 import canml.canmlio as canmlio

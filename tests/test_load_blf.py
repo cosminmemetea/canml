@@ -41,8 +41,6 @@ import pytest
 import pandas as pd
 import numpy as np
 import logging
-from pathlib import Path
-import cantools.database.errors as db_errors
 
 import canml.canmlio as canmlio
 from canml.canmlio import load_blf, load_dbc_files, iter_blf_chunks, CanmlConfig

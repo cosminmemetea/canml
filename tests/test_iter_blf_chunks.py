@@ -27,7 +27,6 @@ Best Practices:
 import pytest
 import pandas as pd
 import numpy as np
-from pathlib import Path
 import canml.canmlio as canmlio
 from canml.canmlio import iter_blf_chunks, CanmlConfig
 

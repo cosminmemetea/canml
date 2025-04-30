@@ -222,49 +222,64 @@ def load_blf(
     expected_signals: Optional[Iterable[str]] = None,
 ) -> pd.DataFrame:
     """
-    Load an entire BLF file into a DataFrame, decoding and aligning signals.
+    Load an entire BLF file into a pandas DataFrame, with robust decoding,
+    filtering, timing normalization, missing‐signal injection, and metadata.
 
     Args:
-        blf_path: .blf file path.
-        db: CantoolsDatabase or DBC file path(s).
-        config: CanmlConfig instance.
-        message_ids: IDs to include (None=all).
-        expected_signals: signals to include (None=all in DBC).
+        blf_path: Path to the .blf log file.
+        db: Either a CantoolsDatabase instance or path(s) to DBC file(s).
+        config: CanmlConfig instance controlling chunking, timing, dtypes, etc.
+        message_ids: Optional set of CAN arbitration IDs to include (None = all).
+        expected_signals: Optional iterable of signal names to include (None = all signals in DBC).
 
     Returns:
-        pandas.DataFrame with columns [timestamp,...signals].
+        DataFrame with columns ["timestamp", …signals], enriched with:
+          - raw_timestamp (if uniform timing)
+          - df.attrs["signal_attributes"] mapping signal→custom attributes
+          - enum signals as pandas.Categorical
     """
+    # 1️⃣ Prepare config
     config = config or CanmlConfig()
 
-    # Validate expected_signals duplicates
+    # 2️⃣ Normalize expected_signals and check duplicates
     if expected_signals is not None:
-        exp_list = list(expected_signals)
+        exp_list = [str(s) for s in expected_signals]
         if len(exp_list) != len(set(exp_list)):
             raise ValueError("Duplicate names in expected_signals")
     else:
         exp_list = None
 
-    # Load DB
+    # 3️⃣ Load or reuse CantoolsDatabase
     dbobj = db if isinstance(db, CantoolsDatabase) else load_dbc_files(db)
 
-    # Warn on explicit empty message_ids
+    # 4️⃣ Warn if user passed an explicit empty message_ids
     if message_ids is not None and not message_ids:
         glogger.warning("Empty message_ids provided; no messages will be decoded")
 
-    # Determine expected signals
-    all_sigs = [s.name for m in dbobj.messages for s in m.signals]
+    # 5️⃣ Determine which signals to expect
+    all_sigs = [s.name for msg in dbobj.messages for s in msg.signals]
     expected = exp_list if exp_list is not None else all_sigs
 
-    # Validate dtype_map
+    # 6️⃣ Validate dtype_map keys
     dtype_map = config.dtype_map or {}
     for sig in dtype_map:
         if sig not in expected:
             raise ValueError(f"dtype_map contains unknown signal: {sig}")
 
-    # Decode chunks
+    # 7️⃣ Build a safe filter_signals set (avoid unhashable items)
+    try:
+        filter_set = set(expected)
+    except TypeError:
+        filter_set = {str(s) for s in expected}
+
+    # 8️⃣ Decode in chunks
     try:
         chunks = list(iter_blf_chunks(
-            blf_path, dbobj, config, message_ids, set(expected)
+            blf_path,
+            dbobj,
+            config,
+            message_ids,
+            filter_set
         ))
     except FileNotFoundError:
         raise
@@ -272,7 +287,7 @@ def load_blf(
         glogger.error("Failed to process BLF chunks", exc_info=True)
         raise ValueError(f"Failed to process BLF data: {e}") from e
 
-    # Build DataFrame
+    # 9️⃣ Assemble DataFrame
     if not chunks:
         glogger.warning(f"No data decoded from {blf_path}; returning empty DataFrame")
         df = pd.DataFrame({
@@ -282,42 +297,47 @@ def load_blf(
     else:
         df = pd.concat(chunks, ignore_index=True)
 
-    # Retain only timestamp + expected columns
+    # 1️⃣0️⃣ Retain only timestamp + expected columns
     cols_keep = [c for c in ["timestamp"] + expected if c in df.columns]
     df = df[cols_keep]
 
-    # Sort timestamps
+    # 1️⃣1️⃣ Optional sorting
     if config.sort_timestamps:
         df = df.sort_values("timestamp").reset_index(drop=True)
-    # Uniform timing
+
+    # 1️⃣2️⃣ Optional uniform timing
     if config.force_uniform_timing:
         df["raw_timestamp"] = df["timestamp"]
         df["timestamp"] = np.arange(len(df)) * config.interval_seconds
 
-    # Inject missing signals
+    # 1️⃣3️⃣ Inject missing signals with correct dtype
     for sig in expected:
         if sig not in df.columns:
             npdt = np.dtype(dtype_map.get(sig, float))
             if config.interpolate_missing and sig in all_sigs:
-                df[sig] = df[sig].interpolate(method="linear", limit_direction="both")
+                # create NaN series then interpolate
+                df[sig] = pd.Series([np.nan] * len(df), dtype=npdt) \
+                             .interpolate(method="linear", limit_direction="both")
             elif np.issubdtype(npdt, np.integer):
                 df[sig] = np.zeros(len(df), dtype=npdt)
             else:
                 df[sig] = pd.Series([np.nan] * len(df), dtype=npdt)
 
-    # Collect metadata and convert enums
+    # 1️⃣4️⃣ Collect custom attributes and convert enums
     df.attrs["signal_attributes"] = {
         s.name: getattr(s, "attributes", {})
-        for m in dbobj.messages for s in m.signals if s.name in df.columns
+        for msg in dbobj.messages for s in msg.signals
+        if s.name in df.columns
     }
-    for m in dbobj.messages:
-        for s in m.signals:
+    for msg in dbobj.messages:
+        for s in msg.signals:
             if s.name in df.columns and getattr(s, "choices", None):
                 df[s.name] = pd.Categorical(
-                    df[s.name].map(s.choices), categories=list(s.choices.values())
+                    df[s.name].map(s.choices),
+                    categories=list(s.choices.values())
                 )
 
-    # Ensure timestamp first column
+    # 1️⃣5️⃣ Ensure timestamp is first column
     return df[["timestamp"] + [c for c in df.columns if c != "timestamp"]]
 
 

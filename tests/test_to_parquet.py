@@ -19,9 +19,7 @@ To execute:
 import pytest
 import pandas as pd
 import json
-import os
 import logging
-from pathlib import Path
 
 import canml.canmlio as canmlio
 
