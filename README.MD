@@ -49,39 +49,49 @@ pip install canml
 ## Usage Quickstart
 
 ```bash
-    from canml.canmlio import (
-        load_dbc_files,
-        iter_blf_chunks,
-        load_blf,
-        to_csv,
-        to_parquet
-    )
 
-    # 1. Merge multiple DBCs (with optional signal‐prefixing)
-    db = load_dbc_files(["powertrain.dbc", "chassis.dbc"], prefix_signals=True)
+from canml.canmlio import load_dbc_files, load_blf, to_csv, to_parquet, CanmlConfig
 
-    # 2. Stream‐decode a large BLF in 50k‐row chunks, filtering only IDs 0x100 & 0x200
-    for idx, df_chunk in enumerate(iter_blf_chunks(
-            blf_path="vehicle.blf",
-            db=db,
-            chunk_size=50_000,
-            filter_ids={0x100, 0x200}
-        )):
-        to_parquet(df_chunk, f"shard-{idx:03}.parquet")
+# 1️⃣ Load your DBC(s) (namespace-collision safe)
+#    If you have multiple, pass a list; prefix_signals avoids any name clashes.
+db = load_dbc_files("vehicle.dbc", prefix_signals=True)
 
-    # 3. Load a smaller BLF fully, enforce uniform 10 ms timestamps,
-    #    and ensure specific signals (even if missing) appear as NaN
-    df_full = load_blf(
-        blf_path="session0.blf",
-        db=db,
-        message_ids={0x100, 0x200},
-        expected_signals=["EngineData_EngineRPM", "BrakeStatus_ABSActive"],
-        force_uniform_timing=True,
-        interval_seconds=0.01
-    )
+# 2️⃣ Stream-decode the BLF in memory (no CSV yet)
+#    Use CanmlConfig to tweak chunk size, uniform-timing, interpolation, etc.
+cfg = CanmlConfig(
+    chunk_size=5000,        # rows per chunk
+    force_uniform_timing=True,
+    interval_seconds=0.01,
+    progress_bar=True
+)
+df = load_blf(
+    blf_path="drive.blf",
+    db=db,
+    config=cfg,
+    expected_signals=["Engine_RPM", "Brake_Active"]
+)
 
-    # 4. Export to CSV
-    to_csv(df_full, "session0_decoded.csv")
+# 3️⃣ Inspect your DataFrame
+print(df.head())
+#     timestamp  Engine_RPM  Brake_Active  raw_timestamp
+# 0        0.00       1200.0           0.0       162523.1
+# 1        0.01       1230.0           0.0       162523.2
+# …
+
+# 4️⃣ Export to CSV (with metadata JSON)
+to_csv(
+    df,
+    output_path="drive_data.csv",
+    metadata_path="drive_data_signals.json"
+)
+
+# 5️⃣ Or write Parquet (faster reads/writes + metadata)
+to_parquet(
+    df,
+    output_path="drive_data.parquet",
+    metadata_path="drive_data_signals.json"
+)
+
 
 ```
 
