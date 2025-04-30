@@ -8,26 +8,22 @@
 # canml 
 
 **canml** is a Python toolkit for decoding of CAN bus logs (BLF) using CAN.DBC definitions. It streams large BLF files into pandas DataFrames—either in chunks or all at once—and offers robust CSV and Parquet export, signal‐level filtering, DBC merging, and progress reporting.
-
 ---
 
 ## Key Features
+**Configurable BLF** loading via CanmlConfig (chunk size, progress bars, uniform timing, interpolation, sorting)
 
-- **Merge DBC files**  
-  Load one or multiple `.dbc` files into a single `cantools` Database, with optional signal‐name prefixing to avoid collisions.
+**DBC management with caching**: merge one or many .dbc files, auto-detect collisions, optional signal-name prefixing, and LRU caching for repeated loads
 
-- **Chunked streaming**  
-  Decode arbitrarily large BLF logs in fixed‐size pandas DataFrame chunks, with an optional progress bar.
+**Streaming BLF decode** with iter_blf_chunks()—filter by arbitration ID or by signal name, and emit tidy pandas chunks without blowing up memory
 
-- **Full‐file mode**  
-  Load an entire BLF into one DataFrame, with optional message‐ID filtering, uniform timestamp spacing, and injection of expected signals (NaN‐filled if missing).
+**One-call full-file load** with load_blf()—ID or signal filters, uniform timestamp spacing (with raw backup), missing-signal injection (dtype-safe), linear interpolation, and automatic enum→Categorical conversion
 
-- **Flexible export**  
-  Incremental CSV export (`to_csv`) or single‐shot Parquet export (`to_parquet`).
+**Rich metadata support**: pull any custom DBC attributes into df.attrs['signal_attributes'] and carry them through to exports
 
-- **Signal & message filtering**  
-  Only decode specified CAN IDs or automatically add missing signals for downstream consistency.
+**Incremental CSV & Parquet export**: auto-create directories, write in append mode, and side-dump your signal_attributes JSON alongside your data
 
+**Built-in logging & progress bars** (Python logging + tqdm) to keep you informed without clutter
 ---
 
 ## Installation
@@ -94,47 +90,6 @@ to_parquet(
 
 
 ```
-
-## API Reference
-
-**load_dbc_files(dbc_paths, prefix_signals=False) → Database**
-      
-    Load one or more DBC files into a merged cantools Database.
-
-    dbc_paths – single path or list of .dbc file paths
-
-    prefix_signals – if True, renames signals to "<MessageName>_<SignalName>".
-
-**iter_blf_chunks(blf_path, db, chunk_size=10000, filter_ids=None) → Iterator[DataFrame]**
-
-    Stream‐decode a BLF into DataFrame chunks.
-
-    blf_path – path to .blf file
-
-    db – Database from load_dbc_files
-
-    chunk_size – max rows per DataFrame
-
-    filter_ids – set of CAN IDs to include
-
-**load_blf(blf_path, db, message_ids=None, expected_signals=None, force_uniform_timing=False, interval_seconds=0.01) → DataFrame**
-
-    Decode an entire BLF into one DataFrame.
-
-    message_ids – restrict to given CAN IDs
-
-    expected_signals – list of columns to inject as NaN if missing
-
-    force_uniform_timing – override raw timestamps with uniform spacing
-
-**to_csv(df_or_iter, output_path, mode='w', header=True) → None**
-
-    Write DataFrame or iterator of DataFrames to CSV.
-
-    to_parquet(df, output_path, compression='snappy') → None
-    
-    Write DataFrame to Parquet (pyarrow engine).
-
 
 ## Contributing
 
