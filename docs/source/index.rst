@@ -10,15 +10,30 @@ Welcome to canml’s documentation!
    :align: right
    :height: 2em
    
-canml is a toolkit for streamlined in-memory and on-disk processing of CAN bus logs in BLF format, leveraging pandas and cantools.
+canml
+-----
+Modern toolkit for end-to-end CAN bus log processing—whether you’re streaming huge BLF files in chunks or doing a full in-memory decode—built on top of pandas, cantools, and python-can.
 
 Features at a glance
 --------------------
-- **DBC management:** Merge one or more DBC files with optional signal-name prefixing.
-- **Streaming BLF decoding:** Efficient chunked reads for large logs via `iter_blf_chunks()`.
-- **Full-file BLF loading:** One-call load with filtering, uniform timing, and missing-signal injection.
-- **Incremental CSV & Parquet export:** Write large datasets without exhausting memory.
-- **Built-in logging & progress bars** via Python logging and tqdm.
+
+**Configurable BLF loading via CanmlConfig** (chunk size, progress bars, uniform timing, interpolation, sorting)
+
+**DBC management with caching**: merge one or many .dbc files, auto-detect collisions, optional signal-name prefixing, and LRU caching for repeated loads
+
+**Streaming BLF decode** with iter_blf_chunks()—filter by arbitration ID or by signal name, and emit tidy pandas chunks without blowing up memory
+
+**One-call full-file load** with load_blf()—ID or signal filters, uniform timestamp spacing (with raw backup), missing-signal injection (dtype-safe), linear interpolation, and automatic enum→Categorical conversion
+
+**Rich metadata support**: pull any custom DBC attributes into df.attrs['signal_attributes'] and carry them through to exports
+
+**Incremental CSV & Parquet export**: auto-create directories, write in append mode, and side-dump your signal_attributes JSON alongside your data
+
+**Built-in logging & progress bars** (Python logging + tqdm) to keep you informed without clutter
+
+
+Whether you need to slice-and-dice hundreds of gigabytes of CAN traffic or just spin up a few quick plots, canml handles the heavy lifting so you can focus on insights.
+
 
 Installation
 ------------
@@ -30,17 +45,48 @@ Quickstart
 ----------
 .. code-block:: python
 
-    from canml.canmlio import load_dbc_files, load_blf, to_csv, to_parquet
+   from canml.canmlio import load_dbc_files, load_blf, to_csv, to_parquet, CanmlConfig
 
-    # Merge DBCs
-    db = load_dbc_files(['veh1.dbc', 'veh2.dbc'], prefix_signals=True)
+   # 1️⃣ Load your DBC(s) (namespace-collision safe)
+   #    If you have multiple, pass a list; prefix_signals avoids any name clashes.
+   db = load_dbc_files("vehicle.dbc", prefix_signals=True)
 
-    # Load BLF file
-    df = load_blf('log.blf', db, force_uniform_timing=True, interval_seconds=0.01)
+   # 2️⃣ Stream-decode the BLF in memory (no CSV yet)
+   #    Use CanmlConfig to tweak chunk size, uniform-timing, interpolation, etc.
+   cfg = CanmlConfig(
+      chunk_size=5000,        # rows per chunk
+      force_uniform_timing=True,
+      interval_seconds=0.01,
+      progress_bar=True
+   )
+   df = load_blf(
+      blf_path="drive.blf",
+      db=db,
+      config=cfg,
+      expected_signals=["Engine_RPM", "Brake_Active"]
+   )
 
-    # Export
-    to_csv(df, 'out.csv')
-    to_parquet(df, 'out.parquet')
+   # 3️⃣ Inspect your DataFrame
+   print(df.head())
+   #     timestamp  Engine_RPM  Brake_Active  raw_timestamp
+   # 0        0.00       1200.0           0.0       162523.1
+   # 1        0.01       1230.0           0.0       162523.2
+   # …
+
+   # 4️⃣ Export to CSV (with metadata JSON)
+   to_csv(
+      df,
+      output_path="drive_data.csv",
+      metadata_path="drive_data_signals.json"
+   )
+
+   # 5️⃣ Or write Parquet (faster reads/writes + metadata)
+   to_parquet(
+      df,
+      output_path="drive_data.parquet",
+      metadata_path="drive_data_signals.json"
+   )
+
 
 Contents
 --------
