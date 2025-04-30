@@ -164,17 +164,20 @@ def _load_dbc_files_cached(
         if dup:
             raise ValueError(f"Duplicate signal names: {sorted(dup)}; use prefix_signals=True")
     else:
+        # Prefix signals; handle duplicate message names by using frame_id fallback
         msg_names = [m.name for m in db.messages]
         dup_msg = [n for n, c in Counter(msg_names).items() if c > 1]
         if dup_msg:
+            # Duplicate message names: fall back to <name>_<frame_id> prefix
             glogger.warning(
                 f"Duplicate message names {sorted(dup_msg)}; "
-                "using <name>_<frame_id> prefix"
+                "falling back to <name>_<frame_id> prefix"
             )
             for msg in db.messages:
                 for sig in msg.signals:
                     sig.name = f"{msg.name}_{msg.frame_id}_{sig.name}"
         else:
+            # Unique message names: simple prefix
             for msg in db.messages:
                 for sig in msg.signals:
                     sig.name = f"{msg.name}_{sig.name}"
@@ -398,17 +401,26 @@ def load_blf(
         if sig.name in df.columns
     }
 
-    # Enum conversion
+    # ----------------------------------------------------------------------------
+    # Enum conversion: safely map raw values (or NameSignalValue) to labels
     for msg in dbobj.messages:
         for sig in msg.signals:
             if sig.name in df.columns and getattr(sig, "choices", None):
-                safe_map = {str(k): v for k, v in sig.choices.items()}
-                df[sig.name] = (
-                    df[sig.name].astype(str)
-                                .map(lambda x: safe_map.get(x, x))
-                )
-                df[sig.name] = pd.Categorical(df[sig.name], categories=list(safe_map.values()))
-
+                choices = sig.choices  # mapping raw values (int) to labels (str)
+                cats = list(choices.values())
+                # Define mapper that handles NameSignalValue and raw types
+                def _map(x):
+                    try:
+                        # If x has .value (NameSignalValue), use that
+                        raw = x.value if hasattr(x, 'value') else x
+                    except Exception:
+                        raw = x
+                    # Return label if exists, else original raw
+                    return choices.get(raw, x)
+                # Apply mapping and convert to Categorical
+                df[sig.name] = df[sig.name].apply(_map)
+                df[sig.name] = pd.Categorical(df[sig.name], categories=cats)
+    # Return with timestamp first
     return df[["timestamp"] + [c for c in df.columns if c != "timestamp"]]
 
 # ----------------------------------------------------------------------------
