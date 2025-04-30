@@ -19,20 +19,21 @@ Dependencies:
 Example:
     from canml.canmlio import load_dbc_files, load_blf, to_csv, CanmlConfig
 
-    # 1️⃣ Load DBC
+    # 1. Load DBC with safe prefixing
     db = load_dbc_files("vehicle.dbc", prefix_signals=True)
 
-    # 2️⃣ Configure BLF load
+    # 2. Configure BLF loading
     cfg = CanmlConfig(
         chunk_size=5000,
         progress_bar=True,
+        sort_timestamps=True,
         force_uniform_timing=True,
         interval_seconds=0.02,
         interpolate_missing=True,
         dtype_map={"Engine_RPM": "int32"}
     )
 
-    # 3️⃣ Load BLF file
+    # 3. Load BLF file into DataFrame
     df = load_blf(
         blf_path="drive.blf",
         db=db,
@@ -41,7 +42,7 @@ Example:
         expected_signals=["Engine_RPM", "Brake_Active"]
     )
 
-    # 4️⃣ Export
+    # 4. Export results
     to_csv(df, "drive.csv", metadata_path="drive_meta.json")
 """
 import logging
@@ -79,8 +80,6 @@ _handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s
 glogger.addHandler(_handler)
 glogger.setLevel(logging.INFO)
 
-T = Any
-
 # ----------------------------------------------------------------------------
 # Configuration dataclass
 # ----------------------------------------------------------------------------
@@ -90,18 +89,16 @@ class CanmlConfig:
     Configuration options for BLF processing.
 
     Args:
-        chunk_size (int): Number of messages per chunk when streaming. Defaults to 10000.
-            Example: chunk_size=5000 for smaller, more frequent chunks.
-        progress_bar (bool): Show a tqdm progress bar if True. Defaults to True.
-        dtype_map (Optional[Dict[str, Any]]): Map signal names to pandas dtypes.
-            Example: dtype_map={"Speed": "float32"} ensures Speed column is float32.
-        sort_timestamps (bool): Sort final DataFrame by timestamp. Defaults to False.
-        force_uniform_timing (bool): Override timestamps with uniform spacing. Defaults to False.
-        interval_seconds (float): Spacing interval in seconds for uniform timing. Defaults to 0.01.
-        interpolate_missing (bool): Interpolate missing signal values if True. Defaults to False.
+        chunk_size (int): Number of messages per chunk. Defaults to 10000.
+        progress_bar (bool): Show tqdm bar if True. Defaults to True.
+        dtype_map (Optional[Dict[str, str]]): Signal-to-dtype map. Defaults to None.
+        sort_timestamps (bool): Sort by timestamp. Defaults to False.
+        force_uniform_timing (bool): Uniform spacing of timestamps. Defaults to False.
+        interval_seconds (float): Uniform interval seconds. Defaults to 0.01.
+        interpolate_missing (bool): Interpolate missing signals. Defaults to False.
 
     Raises:
-        ValueError: If chunk_size <= 0 or interval_seconds <= 0.
+        ValueError: If chunk_size or interval_seconds <= 0.
     """
     chunk_size: int = 10000
     progress_bar: bool = True
@@ -118,27 +115,12 @@ class CanmlConfig:
             raise ValueError("interval_seconds must be positive")
 
 # ----------------------------------------------------------------------------
-# DBC loading and merging
+# DBC loading and merging with safe signal prefixing
 # ----------------------------------------------------------------------------
 @lru_cache(maxsize=32)
 def _load_dbc_files_cached(
     dbc_paths: Union[str, Tuple[str, ...]], prefix_signals: bool
 ) -> CantoolsDatabase:
-    """
-    Internal: Load and merge .dbc files into a single CantoolsDatabase.
-
-    Args:
-        dbc_paths (str or tuple): Path(s) to .dbc file(s).
-        prefix_signals (bool): If True, prefix each signal with its message name
-            or message_name_frame_id on duplicate messages.
-
-    Returns:
-        CantoolsDatabase: Loaded database.
-
-    Raises:
-        FileNotFoundError: If any .dbc path is missing.
-        ValueError: On invalid extension, parse errors, or duplicate signal names.
-    """
     paths = [dbc_paths] if isinstance(dbc_paths, str) else list(dbc_paths)
     if not paths:
         raise ValueError("At least one DBC file must be provided")
@@ -158,46 +140,47 @@ def _load_dbc_files_cached(
         except Exception as e:
             raise ValueError(f"Invalid DBC file {pth}: {e}") from e
 
-    names = [sig.name for msg in db.messages for sig in msg.signals]
+    # Collect all signal names
+    all_signals = [sig.name for msg in db.messages for sig in msg.signals]
     if not prefix_signals:
-        dup = [n for n, c in Counter(names).items() if c > 1]
-        if dup:
-            raise ValueError(f"Duplicate signal names: {sorted(dup)}; use prefix_signals=True")
-    else:
-        # Prefix signals; handle duplicate message names by using frame_id fallback
-        msg_names = [m.name for m in db.messages]
-        dup_msg = [n for n, c in Counter(msg_names).items() if c > 1]
-        if dup_msg:
-            # Duplicate message names: fall back to <name>_<frame_id> prefix
-            glogger.warning(
-                f"Duplicate message names {sorted(dup_msg)}; "
-                "falling back to <name>_<frame_id> prefix"
+        dupes = [n for n, c in Counter(all_signals).items() if c > 1]
+        if dupes:
+            raise ValueError(
+                f"Duplicate signal names: {sorted(dupes)}; use prefix_signals=True"
             )
-            for msg in db.messages:
-                for sig in msg.signals:
-                    sig.name = f"{msg.name}_{msg.frame_id}_{sig.name}"
-        else:
-            # Unique message names: simple prefix
-            for msg in db.messages:
-                for sig in msg.signals:
-                    sig.name = f"{msg.name}_{sig.name}"
+    else:
+        # Determine if message names collide
+        msg_names = [msg.name for msg in db.messages]
+        dup_msgs = [n for n, c in Counter(msg_names).items() if c > 1]
+        for idx, msg in enumerate(db.messages):
+            # Choose unique prefix key
+            if dup_msgs:
+                if hasattr(msg, 'frame_id'):
+                    key = msg.frame_id
+                elif hasattr(msg, 'arbitration_id'):
+                    key = msg.arbitration_id
+                else:
+                    key = idx
+                prefix = f"{msg.name}_{key}"
+            else:
+                prefix = msg.name
+            for sig in msg.signals:
+                sig.name = f"{prefix}_{sig.name}"
     return db
+
 
 def load_dbc_files(
     dbc_paths: Union[str, List[str]], prefix_signals: bool = False
 ) -> CantoolsDatabase:
     """
-    Load and merge one or more DBC files, caching results.
+    Load and merge one or more DBC files, with optional signal prefixing.
 
     Args:
-        dbc_paths (str or list): Path or list of DBC file paths.
-        prefix_signals (bool): If True, prefix signals with message names.
+        dbc_paths (str or list): Path or list of DBC files.
+        prefix_signals (bool): Prefix signals to avoid collisions.
 
     Returns:
-        CantoolsDatabase: Merged database.
-
-    Example:
-        db = load_dbc_files("vehicle.dbc", prefix_signals=True)
+        CantoolsDatabase: Merged definitions.
     """
     key = tuple(dbc_paths) if isinstance(dbc_paths, list) else dbc_paths
     return _load_dbc_files_cached(key, prefix_signals)
@@ -207,15 +190,6 @@ def load_dbc_files(
 # ----------------------------------------------------------------------------
 @contextmanager
 def blf_reader(path: str) -> Iterator[BLFReader]:
-    """
-    Context manager that ensures BLFReader.stop() is called.
-
-    Args:
-        path (str): Path to BLF file.
-
-    Yields:
-        BLFReader: Active reader.
-    """
     reader = BLFReader(str(path))
     try:
         yield reader
@@ -226,7 +200,7 @@ def blf_reader(path: str) -> Iterator[BLFReader]:
             glogger.debug("Error closing BLF reader", exc_info=True)
 
 # ----------------------------------------------------------------------------
-# Stream-decode BLF in chunks
+# Stream-decode BLF in chunks with drop summary
 # ----------------------------------------------------------------------------
 
 def iter_blf_chunks(
@@ -239,25 +213,14 @@ def iter_blf_chunks(
     """
     Stream-decode a BLF file into pandas DataFrame chunks.
 
-    Args:
-        blf_path (str): Path to BLF file.
-        db (CantoolsDatabase): Database for message definitions.
-        config (CanmlConfig): Chunk size, progress bar, etc.
-        filter_ids (set[int], optional): Only decode these arbitration IDs.
-        filter_signals (iterable, optional): Only include these signal names.
-
-    Yields:
-        pd.DataFrame: Decoded signals with a 'timestamp' column.
-
-    Example:
-        for chunk in iter_blf_chunks("drive.blf", db, cfg, filter_ids={0x123}):
-            print(chunk.head())
+    Logs total vs dropped message counts.
     """
     p = Path(blf_path)
     if p.suffix.lower() != ".blf" or not p.is_file():
         raise FileNotFoundError(f"Valid BLF file not found: {p}")
 
-    sig_set: Optional[Set[str]] = None
+    # Prepare signal filter set
+    sig_set = None
     if filter_signals is not None:
         sig_set = set()
         for s in filter_signals:
@@ -266,29 +229,37 @@ def iter_blf_chunks(
             except Exception:
                 continue
 
+    total = 0
+    dropped = 0
     buffer: List[Dict[str, Any]] = []
     with blf_reader(blf_path) as reader:
         it = tqdm(reader, desc=p.name) if config.progress_bar else reader
         for msg in it:
+            total += 1
             if filter_ids and msg.arbitration_id not in filter_ids:
+                dropped += 1
                 continue
             try:
                 rec = db.decode_message(msg.arbitration_id, msg.data)
             except Exception:
+                dropped += 1
                 continue
             if sig_set is not None:
                 rec = {k: v for k, v in rec.items() if k in sig_set}
             if rec:
                 rec["timestamp"] = msg.timestamp
                 buffer.append(rec)
+            else:
+                dropped += 1
             if len(buffer) >= config.chunk_size:
                 yield pd.DataFrame(buffer)
                 buffer.clear()
         if buffer:
             yield pd.DataFrame(buffer)
+    glogger.info(f"Decoded {total-dropped}/{total} messages ({dropped} dropped)")
 
 # ----------------------------------------------------------------------------
-# Full-file load with filtering, timing, injection, metadata
+# Full-file load with filtering, timing, injection, metadata, enums
 # ----------------------------------------------------------------------------
 
 def load_blf(
@@ -299,32 +270,20 @@ def load_blf(
     expected_signals: Optional[Iterable[Any]] = None,
 ) -> pd.DataFrame:
     """
-    Load a BLF log into a pandas DataFrame, with full-featured options.
+    Load an entire BLF file into a DataFrame.
 
-    Args:
-        blf_path (str): Path to BLF file.
-        db (CantoolsDatabase or str/list): Database instance or DBC path(s).
-        config (CanmlConfig, optional): Processing options.
-        message_ids (set[int], optional): Filter by CAN IDs. Example: {0x123, 0x200}.
-        expected_signals (iterable, optional): Signals to include. Example: ["Engine_RPM"].
-
-    Returns:
-        pd.DataFrame: Columns ['timestamp', ...signals], dtype-safe, enums as Categorical.
-
-    Example:
-        df = load_blf(
-            blf_path="drive.blf",
-            db="vehicle.dbc",
-            config=cfg,
-            expected_signals=["Speed", NameSignalValue(...)],
-        )
+    Supports:
+      - ID and signal filtering
+      - Timestamp sorting and uniform spacing
+      - Missing signal injection with dtype preservation
+      - Metadata attributes and enum conversion
     """
     config = config or CanmlConfig()
 
-    # Normalize and dedupe expected_signals
-    exp_list: Optional[List[str]] = None
+    # Normalize expected_signals
+    exp_list = None
     if expected_signals is not None:
-        seen: Set[str] = set()
+        seen = set()
         exp_list = []
         for s in expected_signals:
             nm = str(s)
@@ -332,23 +291,30 @@ def load_blf(
                 raise ValueError("Duplicate names in expected_signals")
             seen.add(nm)
             exp_list.append(nm)
+    # Prevent collision with timing
+    if exp_list and ("timestamp" in exp_list or "raw_timestamp" in exp_list):
+        raise ValueError("'timestamp' or 'raw_timestamp' cannot be expected_signals")
 
-    # Load database
+    # Load or reuse database
     dbobj = db if isinstance(db, CantoolsDatabase) else load_dbc_files(db)
     if message_ids is not None and not message_ids:
-        glogger.warning("Empty message_ids provided; no messages decoded")
+        glogger.warning("Empty message_ids provided; no messages will be decoded")
 
-    # Determine expected signals
+    # Determine signals to include
     all_sigs = [sig.name for msg in dbobj.messages for sig in msg.signals]
     expected = exp_list if exp_list is not None else all_sigs
 
     # Validate dtype_map
     dtype_map = config.dtype_map or {}
-    for sig in dtype_map:
-        if str(sig) not in expected:
+    for sig, dt in dtype_map.items():
+        if sig not in expected:
             raise ValueError(f"dtype_map contains unknown signal: {sig}")
+        try:
+            pd.Series(dtype=dt)
+        except Exception:
+            raise ValueError(f"Invalid dtype '{dt}' for signal '{sig}'")
 
-    # Decode chunks
+    # Stream decode
     try:
         chunks = list(iter_blf_chunks(
             blf_path, dbobj, config, message_ids, expected
@@ -359,7 +325,7 @@ def load_blf(
         glogger.error("Failed to process BLF chunks", exc_info=True)
         raise ValueError(f"Failed to process BLF data: {e}") from e
 
-    # Assemble DataFrame
+    # Concatenate or create empty
     if not chunks:
         glogger.warning(f"No data decoded from {blf_path}; returning empty DataFrame")
         df = pd.DataFrame({
@@ -369,21 +335,22 @@ def load_blf(
     else:
         df = pd.concat(chunks, ignore_index=True)
 
-    # Filter columns
-    keep = [c for c in ["timestamp"] + expected if c in df.columns]
-    df = df[keep]
+    # Keep only timestamp + expected signals
+    cols = [c for c in ["timestamp"] + expected if c in df.columns]
+    df = df[cols]
 
-    # Sort timestamps
+    # Sort and uniform timing
     if config.sort_timestamps:
         df = df.sort_values("timestamp").reset_index(drop=True)
-
-    # Uniform timing
     if config.force_uniform_timing:
         df["raw_timestamp"] = df["timestamp"]
         df["timestamp"] = np.arange(len(df)) * config.interval_seconds
 
     # Inject missing signals
+    reserved = {"timestamp", "raw_timestamp"}
     for sig in expected:
+        if sig in reserved:
+            continue
         if sig not in df.columns:
             dt = np.dtype(dtype_map.get(sig, float))
             if config.interpolate_missing and sig in all_sigs:
@@ -401,27 +368,19 @@ def load_blf(
         if sig.name in df.columns
     }
 
-    # ----------------------------------------------------------------------------
-    # Enum conversion: safely map raw values (or NameSignalValue) to labels
+    # Enum conversion
     for msg in dbobj.messages:
         for sig in msg.signals:
             if sig.name in df.columns and getattr(sig, "choices", None):
-                choices = sig.choices  # mapping raw values (int) to labels (str)
+                choices = sig.choices
                 cats = list(choices.values())
-                # Define mapper that handles NameSignalValue and raw types
                 def _map(x):
-                    try:
-                        # If x has .value (NameSignalValue), use that
-                        raw = x.value if hasattr(x, 'value') else x
-                    except Exception:
-                        raw = x
-                    # Return label if exists, else original raw
+                    raw = getattr(x, 'value', x)
                     return choices.get(raw, x)
-                # Apply mapping and convert to Categorical
                 df[sig.name] = df[sig.name].apply(_map)
                 df[sig.name] = pd.Categorical(df[sig.name], categories=cats)
-    # Return with timestamp first
-    return df[["timestamp"] + [c for c in df.columns if c != "timestamp"]]
+
+    return df
 
 # ----------------------------------------------------------------------------
 # CSV export
@@ -436,19 +395,16 @@ def to_csv(
     metadata_path: Optional[str] = None,
 ) -> None:
     """
-    Write DataFrame or chunks to CSV with metadata JSON.
+    Write DataFrame or chunks to CSV with side-car metadata JSON.
 
     Args:
         df_or_iter (DataFrame or iterable): Data to write.
-        output_path (str): CSV path.
-        mode ("w"/"a"): Write or append mode.
-        header (bool): Include header row.
-        pandas_kwargs (dict, optional): Extra pandas.to_csv kwargs.
-        columns (list, optional): Subset of columns to write.
-        metadata_path (str, optional): JSON path for signal_attributes.
-
-    Example:
-        to_csv(df, "out.csv", metadata_path="out_meta.json")
+        output_path (str): Destination CSV file path.
+        mode (str): Write mode 'w' or 'a'.
+        header (bool): Include header in CSV.
+        pandas_kwargs (dict): Extra pandas.to_csv args.
+        columns (list): Subset of columns to write.
+        metadata_path (str): Path to JSON for signal_attributes.
     """
     import json
 
@@ -458,12 +414,12 @@ def to_csv(
         raise ValueError("Duplicate columns specified")
     p.parent.mkdir(parents=True, exist_ok=True)
 
-    def _write(df: pd.DataFrame, m, h, wmeta):
-        df.to_csv(p, mode=m, header=h, index=False, columns=columns, **pandas_kwargs)
+    def _write(block: pd.DataFrame, m, h, wmeta):
+        block.to_csv(p, mode=m, header=h, index=False, columns=columns, **pandas_kwargs)
         if metadata_path and wmeta:
             mpath = Path(metadata_path)
             mpath.parent.mkdir(parents=True, exist_ok=True)
-            attrs = df.attrs.get("signal_attributes", {c: {} for c in df.columns})
+            attrs = block.attrs.get("signal_attributes", {c: {} for c in block.columns})
             mpath.write_text(json.dumps(attrs))
 
     if isinstance(df_or_iter, pd.DataFrame):
@@ -488,17 +444,14 @@ def to_parquet(
     metadata_path: Optional[str] = None,
 ) -> None:
     """
-    Write a DataFrame to Parquet with optional metadata JSON.
+    Write DataFrame to Parquet with side-car metadata JSON.
 
     Args:
         df (DataFrame): Data to write.
-        output_path (str): .parquet file path.
-        compression (str): Codec e.g. snappy, gzip.
-        pandas_kwargs (dict, optional): Extra pandas.to_parquet kwargs.
-        metadata_path (str, optional): JSON path for signal_attributes.
-
-    Example:
-        to_parquet(df, "data.parquet", metadata_path="data_meta.json")
+        output_path (str): Destination .parquet file path.
+        compression (str): Parquet codec.
+        pandas_kwargs (dict): Extra pandas.to_parquet args.
+        metadata_path (str): JSON path for signal_attributes.
     """
     import json
 
@@ -508,8 +461,8 @@ def to_parquet(
     try:
         df.to_parquet(p, engine="pyarrow", compression=compression, **pandas_kwargs)
     except Exception as e:
-        glogger.error(f"Failed Parquet {p}: {e}", exc_info=True)
-        raise ValueError(f"Failed to export Parquet: {e}") from e
+        glogger.error(f"Failed to export Parquet {p}: {e}", exc_info=True)
+        raise ValueError(f"Failed to export Parquet: {e}")
 
     if metadata_path:
         mpath = Path(metadata_path)
