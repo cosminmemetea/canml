@@ -46,6 +46,7 @@ Example:
     to_csv(df, "drive.csv", metadata_path="drive_meta.json")
 """
 import logging
+import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple, Union
 from contextlib import contextmanager
@@ -91,7 +92,7 @@ class CanmlConfig:
     Args:
         chunk_size (int): Number of messages per chunk. Defaults to 10000.
         progress_bar (bool): Show tqdm bar if True. Defaults to True.
-        dtype_map (Optional[Dict[str, str]]): Signal-to-dtype map. Defaults to None.
+        dtype_map (Optional[Dict[str, Any]]): Signal-to-dtype map. Defaults to None.
         sort_timestamps (bool): Sort by timestamp. Defaults to False.
         force_uniform_timing (bool): Uniform spacing of timestamps. Defaults to False.
         interval_seconds (float): Uniform interval seconds. Defaults to 0.01.
@@ -121,6 +122,9 @@ class CanmlConfig:
 def _load_dbc_files_cached(
     dbc_paths: Union[str, Tuple[str, ...]], prefix_signals: bool
 ) -> CantoolsDatabase:
+    """
+    Internal: Load and merge .dbc files into a single CantoolsDatabase.
+    """
     paths = [dbc_paths] if isinstance(dbc_paths, str) else list(dbc_paths)
     if not paths:
         raise ValueError("At least one DBC file must be provided")
@@ -140,7 +144,7 @@ def _load_dbc_files_cached(
         except Exception as e:
             raise ValueError(f"Invalid DBC file {pth}: {e}") from e
 
-    # Collect all signal names
+    # Prefixing logic
     all_signals = [sig.name for msg in db.messages for sig in msg.signals]
     if not prefix_signals:
         dupes = [n for n, c in Counter(all_signals).items() if c > 1]
@@ -149,11 +153,9 @@ def _load_dbc_files_cached(
                 f"Duplicate signal names: {sorted(dupes)}; use prefix_signals=True"
             )
     else:
-        # Determine if message names collide
         msg_names = [msg.name for msg in db.messages]
         dup_msgs = [n for n, c in Counter(msg_names).items() if c > 1]
         for idx, msg in enumerate(db.messages):
-            # Choose unique prefix key
             if dup_msgs:
                 if hasattr(msg, 'frame_id'):
                     key = msg.frame_id
@@ -173,14 +175,7 @@ def load_dbc_files(
     dbc_paths: Union[str, List[str]], prefix_signals: bool = False
 ) -> CantoolsDatabase:
     """
-    Load and merge one or more DBC files, with optional signal prefixing.
-
-    Args:
-        dbc_paths (str or list): Path or list of DBC files.
-        prefix_signals (bool): Prefix signals to avoid collisions.
-
-    Returns:
-        CantoolsDatabase: Merged definitions.
+    Load and merge DBC files with optional prefixing.
     """
     key = tuple(dbc_paths) if isinstance(dbc_paths, list) else dbc_paths
     return _load_dbc_files_cached(key, prefix_signals)
@@ -219,8 +214,7 @@ def iter_blf_chunks(
     if p.suffix.lower() != ".blf" or not p.is_file():
         raise FileNotFoundError(f"Valid BLF file not found: {p}")
 
-    # Prepare signal filter set
-    sig_set = None
+    sig_set: Optional[Set[str]] = None
     if filter_signals is not None:
         sig_set = set()
         for s in filter_signals:
@@ -281,9 +275,9 @@ def load_blf(
     config = config or CanmlConfig()
 
     # Normalize expected_signals
-    exp_list = None
+    exp_list: Optional[List[str]] = None
     if expected_signals is not None:
-        seen = set()
+        seen: Set[str] = set()
         exp_list = []
         for s in expected_signals:
             nm = str(s)
@@ -301,11 +295,11 @@ def load_blf(
         glogger.warning("Empty message_ids provided; no messages will be decoded")
 
     # Determine signals to include
-    all_sigs = [sig.name for msg in dbobj.messages for sig in msg.signals]
-    expected = exp_list if exp_list is not None else all_sigs
+    all_sigs: List[str] = [sig.name for msg in dbobj.messages for sig in msg.signals]
+    expected: List[str] = exp_list if exp_list is not None else all_sigs
 
     # Validate dtype_map
-    dtype_map = config.dtype_map or {}
+    dtype_map: Dict[str, Any] = config.dtype_map or {}
     for sig, dt in dtype_map.items():
         if sig not in expected:
             raise ValueError(f"dtype_map contains unknown signal: {sig}")
@@ -336,8 +330,8 @@ def load_blf(
         df = pd.concat(chunks, ignore_index=True)
 
     # Keep only timestamp + expected signals
-    cols = [c for c in ["timestamp"] + expected if c in df.columns]
-    df = df[cols]
+    cols_keep = [c for c in ["timestamp"] + expected if c in df.columns]
+    df = df[cols_keep]
 
     # Sort and uniform timing
     if config.sort_timestamps:
@@ -368,16 +362,17 @@ def load_blf(
         if sig.name in df.columns
     }
 
-    # Enum conversion
+    # Enum conversion: safely map values to string labels
     for msg in dbobj.messages:
         for sig in msg.signals:
             if sig.name in df.columns and getattr(sig, "choices", None):
-                choices = sig.choices
-                cats = list(choices.values())
-                def _map(x):
+                choices = sig.choices  # raw -> label
+                cats = [str(lab) for lab in choices.values()]
+                def _map_label(x):
                     raw = getattr(x, 'value', x)
-                    return choices.get(raw, x)
-                df[sig.name] = df[sig.name].apply(_map)
+                    lbl = choices.get(raw, raw)
+                    return str(lbl)
+                df[sig.name] = df[sig.name].apply(_map_label)
                 df[sig.name] = pd.Categorical(df[sig.name], categories=cats)
 
     return df
