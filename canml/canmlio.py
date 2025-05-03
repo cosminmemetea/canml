@@ -129,7 +129,7 @@ def _load_dbc_files_cached(
     if not paths:
         raise ValueError("At least one DBC file must be provided")
 
-    db = CantoolsDatabase()
+    db = CantoolsDatabase(strict=False)
     for p in paths:
         pth = Path(p)
         if pth.suffix.lower() != ".dbc":
