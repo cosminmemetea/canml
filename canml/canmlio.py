@@ -366,15 +366,28 @@ def load_blf(
     for msg in dbobj.messages:
         for sig in msg.signals:
             if sig.name in df.columns and getattr(sig, "choices", None):
-                choices = sig.choices  # raw -> label
-                cats = [str(lab) for lab in choices.values()]
+                # new code: dedupe categories, preserving order
+                choices = sig.choices  # raw → label
+                # map raw→string label
                 def _map_label(x):
                     raw = getattr(x, 'value', x)
                     lbl = choices.get(raw, raw)
                     return str(lbl)
+
+                # build a unique list of labels
+                labels = [str(lab) for lab in choices.values()]
+                # preserve first‐seen order
+                seen = set()
+                cats = []
+                for lab in labels:
+                    if lab not in seen:
+                        seen.add(lab)
+                        cats.append(lab)
+
+                # apply mapping and assign categorical with unique categories
                 df[sig.name] = df[sig.name].apply(_map_label)
                 df[sig.name] = pd.Categorical(df[sig.name], categories=cats)
-
+                
     return df
 
 # ----------------------------------------------------------------------------
