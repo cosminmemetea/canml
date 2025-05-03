@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 project = "canml"
 author = "Cosmin B. Memetea"
-release = "0.1.13-alpha"
+release = "0.1.14-alpha"
 
 extensions = [
     "sphinx.ext.autodoc",
